@@ -183,10 +183,107 @@ a.poster{text-decoration:none}
 .nav .plus .ic svg{width:22px;height:22px}
 
 /* Camadas */
-.toast{position:absolute;left:18px;right:18px;bottom:calc(var(--bottom) + 108px);background:var(--purple);color:var(--white);border-radius:14px;padding:14px 16px;font-size:14px;font-weight:600;z-index:30;box-shadow:0 10px 30px rgba(0,0,0,.4)}
-.sheet-bg{position:absolute;inset:0;background:rgba(0,0,0,.6);z-index:40;display:flex;align-items:flex-end}
-.sheet{width:100%;background:var(--card);border-top:1px solid var(--line);border-radius:22px 22px 0 0;padding:20px 18px calc(var(--bottom) + 24px);display:flex;flex-direction:column;gap:14px}
-.sheet h3{margin:0;font-size:26px;font-weight:900;font-stretch:72%;text-transform:uppercase}
+.toast{position:absolute;left:18px;right:18px;bottom:calc(var(--bottom) + 108px);background:var(--purple);color:var(--white);border-radius:14px;padding:14px 16px;font-size:14px;font-weight:600;z-index:60;box-shadow:0 10px 30px rgba(0,0,0,.4)}
+/* Janelas que sobem de baixo (design do Claude Design) */
+.sheet-bg{position:absolute;inset:0;z-index:40;background:rgba(0,0,0,.62);display:flex;flex-direction:column;justify-content:flex-end}
+.sheet{max-height:90%;background:var(--ink);border-top:1px solid var(--line);border-radius:28px 28px 0 0;display:flex;flex-direction:column;overflow:hidden}
+.grab{flex:none;display:flex;justify-content:center;padding:10px 0 4px}
+.grab i{width:40px;height:5px;border-radius:3px;background:#3A3232}
+.sheet-scroll>*{flex-shrink:0}
+.sheet-scroll{overflow-y:auto;scrollbar-width:none;padding:10px 22px calc(var(--bottom) + 34px);display:flex;flex-direction:column;gap:18px}
+.sheet-foot{flex:none;border-top:1px solid var(--line);padding:12px 16px calc(var(--bottom) + 22px);display:flex;gap:10px;background:var(--ink)}
+.sk{font-family:var(--mono);font-size:11px;letter-spacing:.12em;color:var(--muted);text-transform:uppercase}
+.stt{font-size:36px;line-height:.92;font-weight:900;font-stretch:72%;text-transform:uppercase;text-wrap:pretty;overflow-wrap:anywhere}
+.stx{font-size:15px;line-height:1.45;color:#D8D1CD;text-wrap:pretty}
+.stx b{color:var(--white)}
+.bigav{flex:none;width:64px;height:64px;border-radius:50%;border:3px solid var(--purple);font-size:26px;font-weight:900;display:flex;align-items:center;justify-content:center}
+.menu{background:var(--card);border:1px solid var(--line);border-radius:16px;overflow:hidden;display:flex;flex-direction:column}
+.mi{display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;min-height:54px;padding:0 16px;border:none;border-top:1px solid var(--line);background:transparent;color:var(--white);font-size:15px;font-weight:600;text-align:left}
+.mi:first-child{border-top:none}
+.mi .mr{color:#7A7270;font-family:var(--mono);font-size:11px}
+.mi.danger{color:#FF5A61}
+.mi:active{transform:none;background:#211C1C}
+.prempill{height:22px;padding:0 8px;border-radius:11px;background:var(--purple);font-size:11px;font-weight:800;display:flex;align-items:center}
+.bigcta{height:64px;border-radius:18px;font-size:20px;font-weight:900;font-stretch:85%;text-transform:uppercase}
+.memrow{display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid #1F1B1B}
+.memrow .mn{font-size:16px;font-weight:700;min-width:0;overflow-wrap:anywhere}
+.admtag{height:22px;padding:0 8px;border-radius:11px;border:1.5px solid var(--red);font-family:var(--mono);font-size:10px;display:flex;align-items:center}
+.rmx{flex:none;width:36px;height:36px;border-radius:50%;border:1px solid var(--line);background:transparent;color:var(--muted);font-size:16px}
+.rmx:hover{color:var(--white);border-color:var(--red)}
+.checkrow{display:flex;align-items:center;gap:12px;padding:14px;border-radius:14px;border:1.5px solid var(--line);background:var(--card);color:var(--white);text-align:left}
+.checkrow .box{flex:none;width:24px;height:24px;border-radius:7px;border:2px solid var(--line);display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:900}
+.checkrow.on,.checkrow.on .box{border-color:var(--red)}
+.checkrow.on .box{background:var(--red)}
+.grow{display:flex;align-items:center;justify-content:space-between;gap:10px;min-height:60px;padding:0 16px;border-radius:14px;border:1.5px solid var(--line);background:var(--card);color:var(--white);font-size:17px;font-weight:800;font-stretch:85%}
+.grow.cur{border-color:var(--purple)}
+.infot{background:var(--card);border:1px solid var(--line);border-radius:18px;overflow:hidden}
+.infot>div{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:14px 16px;border-top:1px solid var(--line)}
+.infot>div:first-child{border-top:none}
+.infot .k{font-family:var(--mono);font-size:11px;letter-spacing:.08em;color:var(--muted);text-transform:uppercase}
+.infot .v{font-family:var(--mono);font-size:13px;text-align:right;overflow-wrap:anywhere}
+.cmp{border:1px solid var(--line);border-radius:18px;overflow:hidden}
+.cmph,.cmpr{display:grid;grid-template-columns:1.3fr 1fr 1fr}
+.cmph{font-family:var(--mono);font-size:11px;letter-spacing:.08em}
+.cmph span{padding:12px;color:var(--muted)}
+.cmph .p{background:var(--red);color:var(--white);font-weight:600}
+.cmpr{border-top:1px solid var(--line);font-size:14px;line-height:1.25}
+.cmpr span{padding:12px}
+.cmpr .l{font-weight:600}
+.cmpr .f{color:var(--muted)}
+.cmpr .p{background:rgba(224,38,47,.12);font-weight:800}
+.cmpr.hl{background:#241515}
+.cmpr.hl .l{color:#FF5A61}
+.qrcard{background:var(--white);border-radius:22px;padding:20px;display:flex;flex-direction:column;align-items:center;gap:12px}
+.qrcard .qr{width:224px;max-width:100%;aspect-ratio:1}
+.qrcard .qr svg{width:100%;height:100%;display:block}
+.spin{width:64px;height:64px;border-radius:50%;border:5px solid var(--purple);border-top-color:var(--line)}
+@media (prefers-reduced-motion:no-preference){.spin{animation:girar 1.2s linear infinite}@keyframes girar{to{transform:rotate(360deg)}}}
+.benef{display:flex;flex-direction:column;gap:10px;font-size:16px;font-weight:700}
+.benef div{display:flex;gap:10px;align-items:center}
+.benef .ck{width:26px;height:26px;border-radius:50%;background:var(--red);display:flex;align-items:center;justify-content:center;font-size:12px}
+.warnbox{display:flex;gap:12px;align-items:center;background:rgba(224,38,47,.12);border:1px solid var(--red);border-radius:14px;padding:12px 14px;font-size:14px;font-weight:600;line-height:1.35}
+.warnbox .i{flex:none;width:24px;height:24px;border-radius:50%;background:var(--red);display:flex;align-items:center;justify-content:center;font-weight:900;font-size:14px}
+.paycard{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:14px;display:flex;flex-direction:column;gap:10px}
+.paycard.g0{border-color:#4A4141}
+.paycard.g1{border-color:#5A2A2D}
+.paystat{flex:none;height:26px;padding:0 10px;border-radius:13px;border:1.5px solid var(--white);font-family:var(--mono);font-size:10px;font-weight:600;display:flex;align-items:center;text-transform:uppercase;white-space:nowrap}
+.paystat.aprovado{background:var(--purple);border-color:var(--purple)}
+.paystat.recusado{background:#2A2424;border-color:#2A2424;color:var(--muted)}
+.paystat.reembolso_pedido{border-color:var(--red);color:#FF5A61}
+.paystat.reembolsado{border-color:var(--line);color:var(--muted)}
+.comlist{display:flex;flex-direction:column;gap:16px}
+.crow{display:grid;grid-template-columns:36px 1fr 40px;gap:12px;align-items:start}
+.like{border:none;background:transparent;color:#7A7270;display:flex;flex-direction:column;align-items:center;gap:2px;padding:4px 0}
+.like.on{color:var(--red)}
+.like .h{font-size:20px;line-height:1}
+.cinput{flex:1;min-width:0;height:48px;border-radius:24px;border:1.5px solid var(--line);background:var(--card);color:var(--white);padding:0 16px;font-size:16px;outline:none}
+.cinput:focus{border-color:var(--purple)}
+.csend{flex:none;height:48px;padding:0 18px;border-radius:24px;border:none;background:var(--red);color:var(--white);font-size:15px;font-weight:800}
+.csend.off{background:#2A2424}
+.btn-ink{height:60px;border-radius:18px;border:none;background:var(--ink);color:var(--white);font-size:19px;font-weight:900;font-stretch:85%;text-transform:uppercase;width:100%}
+.btn-white.off{opacity:.5}
+
+/* Topo do Roteiro e reações do card */
+.topbar{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.topbar-l{flex:1;display:flex;gap:8px;min-width:0}
+.grpbtn{flex:0 1 auto;min-width:0;height:36px;padding:0 12px;border-radius:18px;border:1px solid var(--line);background:var(--card);color:var(--white);font-size:14px;font-weight:700;display:flex;align-items:center;gap:6px;white-space:nowrap}
+.grpbtn .nm{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.grpbtn .car{color:var(--muted);font-size:10px}
+.badge{flex:none;height:36px;padding:0 12px;border-radius:18px;border:1.5px solid var(--red);background:var(--red);color:var(--white);font-size:13px;font-weight:800;white-space:nowrap}
+.badge.prem{background:var(--purple);border-color:var(--purple)}
+.badge.wait{background:transparent;border-color:var(--purple)}
+.socialrow{display:flex;align-items:center;gap:6px;border-top:1px solid var(--line);padding-top:12px}
+.rx{height:34px;padding:0 10px;border-radius:17px;border:1.5px solid var(--line);background:transparent;color:var(--white);display:flex;align-items:center;gap:5px;font-family:var(--mono);font-size:12px;font-weight:600}
+.rx .e{font-size:15px}
+.rx.on{background:rgba(155,93,229,.3);border-color:var(--purple)}
+.rx:active{transform:scale(.94)}
+.rx.com{margin-left:auto;padding:0 12px}
+
+/* Tela "Premium liberado!" */
+.login.lib{background:var(--red)}
+.libseal{width:168px;height:168px;border-radius:50%;background:var(--ink);border:6px solid var(--white);box-shadow:0 0 0 10px var(--purple);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px}
+.libseal .mono{font-size:10px;letter-spacing:.12em;max-width:120px;text-align:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.libck{width:26px;height:26px;border-radius:50%;background:var(--ink);display:flex;align-items:center;justify-content:center;font-size:12px}
 .sheet .row{display:flex;gap:10px}
 .sheet .row>*{flex:1}
 .btn-line{height:52px;border-radius:14px;border:1.5px solid var(--line);background:transparent;color:var(--white);font-size:15px;font-weight:700}
