@@ -656,7 +656,16 @@
         el("button",{class:"btn-red",onclick:() => shareInvite(g)},"Convidar amigas"),
         s.showLink ? el("input",{class:"input",readonly:true,value:inviteUrl(g),onfocus:e => e.target.select()}) : null,
         el("div",{class:"mono",style:{fontSize:"12px",color:"#A39C98",textAlign:"center"},text:`código do grupo: ${g.codigo}`}),
-        el("div",{class:"people"}, orderedPeople().map(p => el("span",{class:"person",style:{cursor:"default"}}, av(p.id), p.nome + (p.id === g.owner ? " · criou" : "")))),
+        el("div",{class:"people"}, orderedPeople().map(p =>
+          dono && p.id !== S.uid
+            ? el("button",{class:"person",title:"Remover do grupo",onclick:() => { S.sheet = {type:"remover", pessoa:p.id, apagar:false}; render(); }}, av(p.id), p.nome, el("span",{style:{color:"#FF6B6B",fontSize:"16px",marginLeft:"2px"},text:"×"}))
+            : el("span",{class:"person",style:{cursor:"default"}}, av(p.id), p.nome + (p.id === g.owner ? " · admin" : "")))),
+        dono ? el("p",{style:{margin:0,fontSize:"12.5px",color:"#A39C98",textAlign:"center"},text:"Você é admin: toque numa pessoa para remover do grupo."}) : null,
+        dono ? el("button",{class:"lnk",style:{alignSelf:"center"},onclick:async () => {
+          const r = await S.sb.rpc("novo_codigo", {p_grupo: g.id});
+          if (r.error) return fail(r.error, "Não trocou");
+          g.codigo = r.data; render(); flash("Novo link criado. O link antigo não funciona mais.");
+        }},"Gerar novo link de convite") : null,
         S.grupos.length > 1 ? el("label",{class:"field"}, el("span",{class:"eyebrow",text:"Trocar de grupo"}),
           el("select",{class:"input",id:"g-troca",onchange:e => switchGroup(e.target.value)},
             S.grupos.map(x => el("option",{value:x.id,selected:x.id === g.id,text:x.nome})))) : null,
@@ -703,6 +712,21 @@
         el("div",{class:"field"}, el("span",{class:"eyebrow",text:"Dia para gravar"}),
           el("div",{class:"days"}, DAYS.map(d => el("button",{class:"day" + (s.dia === d ? " on" : ""), onclick:() => { s.dia = d; render(); }}, el("small",{text:wd(d)}), el("b",{text:dd(d)}))))),
         el("button",{class:"btn-red",disabled:S.busy,onclick:() => usePub(p, s.grupo, s.dia)}, S.busy ? "Adicionando…" : "Adicionar ao roteiro")];
+    } else if (s.type === "remover") {
+      const g = curGroup(), n = S.trends.filter(t => t.owner === s.pessoa).length;
+      content = [el("h3",{text:`Remover ${nameOf(s.pessoa)}?`}),
+        el("p",{style:{margin:0,fontSize:"15px",lineHeight:"1.45",color:"#D8D1CD"},text:`${nameOf(s.pessoa)} sai do grupo “${g ? g.nome : ""}”, os votos são apagados e não dá para voltar, nem com o link de convite.`}),
+        n ? el("label",{class:"toggle",style:{display:"flex",gap:"10px",alignItems:"center",fontSize:"14px",color:"#D8D1CD"}},
+              el("input",{type:"checkbox",checked:s.apagar,style:{width:"18px",height:"18px",accentColor:"#FF6B6B"},onchange:e => s.apagar = e.target.checked}),
+              `Apagar também ${n === 1 ? "a trend criada" : `as ${n} trends criadas`} por ${nameOf(s.pessoa)}`) : null,
+        el("button",{class:"btn-line danger",disabled:S.busy,onclick:async () => {
+          S.busy = true; render();
+          const {error} = await S.sb.rpc("remover_membro", {p_grupo: g.id, p_user: s.pessoa, p_apagar_trends: !!s.apagar});
+          S.busy = false;
+          if (error) { render(); return flash(error.message); }
+          const nome = nameOf(s.pessoa);
+          S.sheet = {type:"grupo"}; await loadAll(); render(); flash(`${nome} saiu do grupo`);
+        }}, S.busy ? "Removendo…" : "Remover do grupo")];
     } else if (s.type === "novogrupo") {
       content = [el("h3",{text:"Novo grupo"}), ...groupForm()];
     } else if (s.type === "excluir") {
