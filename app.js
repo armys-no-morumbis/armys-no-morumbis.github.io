@@ -24,11 +24,18 @@
   // ——— Estado ———
   const S = {
     sb:null, uid:null, user:null, me:null, loaded:false,
+    grupos:[], grupo:null, membros:[],
     profiles:{}, trends:[], votos:[], videos:[], videosMissing:false,
     screen:"feed", filter:"todas", day:null, toast:null,
     form:null, errors:{}, editing:null, sheet:null, viewer:null, busy:false
   };
-  try { const s = localStorage.getItem("trends-screen"); if (s && s !== "nova") S.screen = s; } catch(e) {}
+  const store = { get:k => { try { return localStorage.getItem(k); } catch(e) { return null; } },
+                  set:(k,v) => { try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch(e) {} } };
+  { const s = store.get("trends-screen"); if (s && s !== "nova") S.screen = s; }
+  S.grupo = store.get("trends-grupo");
+  // Link de convite: ?convite=CODIGO — guardado até a pessoa entrar com o Google
+  { const c = new URLSearchParams(location.search).get("convite");
+    if (c && /^[A-Za-z0-9]{6,12}$/.test(c)) { store.set("trends-convite", c.toUpperCase()); history.replaceState(null, "", location.pathname); } }
 
   // ——— Utilidades ———
   const $root = document.getElementById("root"), $toast = document.getElementById("toast");
@@ -80,43 +87,84 @@
   const nameOf = uid => (S.profiles[uid] && S.profiles[uid].nome) || "Alguém";
   const initial = uid => (nameOf(uid).trim()[0] || "?").toUpperCase();
   const av = (uid, extra = {}) => { const [bg, fg] = colorOf(uid); return el("div",{class:"av", title:nameOf(uid), style:{background:bg, color:fg, ...extra}, text:initial(uid)}); };
-  const groupSize = () => Math.max(1, Object.keys(S.profiles).length);
+  const groupSize = () => Math.max(1, S.membros.length);
+  const curGroup = () => S.grupos.find(g => g.id === S.grupo) || null;
+  const showDate = () => (curGroup() && curGroup().show_dia) || SHOW;
+  const inviteUrl = g => `${location.origin}${location.pathname}?convite=${g.codigo}`;
 
   // ——— Dados ———
-  let channel = null, reloadT = null, lastSig = "";
+  // Cada consulta só devolve o que é do grupo da pessoa: o banco bloqueia o resto
+  let lastSig = "", loading = false;
   async function loadAll() {
-    const [p, i, v, vid] = await Promise.all([
-      S.sb.from("profiles").select("*"),
-      S.sb.from("itens").select("*").eq("categoria","trend").order("dia").order("created_at"),
-      S.sb.from("votos").select("*"),
-      S.sb.from("videos").select("*").order("created_at", {ascending:false})
-    ]);
-    const err = p.error || i.error || v.error;
-    if (err) { fail(err, "Não carregou"); return; }
-    S.profiles = Object.fromEntries(p.data.map(r => [r.id, r]));
-    S.trends = i.data;
-    S.votos = v.data.filter(r => r.slot === r.item_id);
-    S.videosMissing = !!vid.error;
-    S.videos = vid.error ? [] : vid.data;
-    S.me = S.profiles[S.uid] || null;
-    S.loaded = true;
-    const sig = JSON.stringify([S.profiles, S.trends, S.votos, S.videos]);
-    if (sig !== lastSig) { lastSig = sig; softRender(); }
+    if (!S.uid || loading) return;
+    loading = true;
+    try {
+      const [meQ, gq] = await Promise.all([
+        S.sb.from("profiles").select("*").eq("id", S.uid).maybeSingle(),
+        S.sb.from("grupos").select("*").order("created_at")
+      ]);
+      if (gq.error) { fail(gq.error, "Não carregou"); return; }
+      S.me = meQ.data || null;
+      S.grupos = gq.data;
+      const convite = store.get("trends-convite");
+      if (convite && S.me) {
+        store.set("trends-convite", null);
+        const r = await S.sb.rpc("entrar_grupo", {p_codigo: convite});
+        if (r.error) flash(r.error.message);
+        else {
+          if (!S.grupos.some(g => g.id === r.data.id)) S.grupos.push(r.data);
+          S.grupo = r.data.id; store.set("trends-grupo", S.grupo);
+          flash(`Você entrou no grupo “${r.data.nome}” 💜`);
+        }
+      }
+      if (!S.grupos.some(g => g.id === S.grupo)) { S.grupo = S.grupos.length ? S.grupos[0].id : null; store.set("trends-grupo", S.grupo); }
+      if (!S.grupo) { S.membros = []; S.profiles = {}; S.trends = []; S.votos = []; S.videos = []; }
+      else {
+        const [m, i, v, vid] = await Promise.all([
+          S.sb.from("membros").select("user_id, created_at").eq("grupo_id", S.grupo),
+          S.sb.from("itens").select("*").eq("grupo_id", S.grupo).eq("categoria","trend").order("dia").order("created_at"),
+          S.sb.from("votos").select("*"),
+          S.sb.from("videos").select("*").eq("grupo_id", S.grupo).order("created_at", {ascending:false})
+        ]);
+        const err = m.error || i.error || v.error;
+        if (err) { fail(err, "Não carregou"); return; }
+        S.membros = m.data;
+        const ids = m.data.map(x => x.user_id);
+        const p = ids.length ? await S.sb.from("profiles").select("*").in("id", ids) : {data:[]};
+        const joined = Object.fromEntries(m.data.map(x => [x.user_id, x.created_at]));
+        S.profiles = Object.fromEntries((p.data || []).map(r => [r.id, {...r, created_at: joined[r.id] || r.created_at}]));
+        S.trends = i.data;
+        const itemIds = new Set(i.data.map(t => t.id));
+        S.votos = v.data.filter(r => r.slot === r.item_id && itemIds.has(r.item_id));
+        S.videosMissing = !!vid.error;
+        S.videos = vid.error ? [] : vid.data;
+      }
+      S.loaded = true;
+      const sig = JSON.stringify([S.me, S.grupos, S.grupo, S.membros, S.profiles, S.trends, S.votos, S.videos]);
+      if (sig !== lastSig) { lastSig = sig; softRender(); }
+    } finally { loading = false; }
   }
-  const scheduleReload = () => { clearTimeout(reloadT); reloadT = setTimeout(loadAll, 350); };
-  function subscribe() {
-    if (channel) return;
-    channel = S.sb.channel("trends");
-    ["itens","votos","profiles","videos"].forEach(t => channel.on("postgres_changes", {event:"*", schema:"public", table:t}, scheduleReload));
-    channel.subscribe();
-  }
+  // Atualiza a cada 12 s com o app aberto (sem conexão ao vivo, que tem limite no plano grátis)
+  setInterval(() => { if (S.uid && !document.hidden) loadAll(); }, 12000);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden && S.uid) loadAll(); });
   async function setSession(session) {
     const uid = session && session.user ? session.user.id : null;
     if (uid === S.uid && (S.loaded || !uid)) { render(); return; }
     S.uid = uid; S.user = session ? session.user : null; S.loaded = false; S.me = null; lastSig = "";
     S.sheet = null; S.viewer = null; S.form = null;
-    if (!uid) { if (channel) { S.sb.removeChannel(channel); channel = null; } render(); return; }
-    render(); await loadAll(); subscribe();
+    if (!uid) { render(); return; }
+    render(); await loadAll();
+  }
+  function switchGroup(id) {
+    S.grupo = id; store.set("trends-grupo", id); S.sheet = null; S.filter = "todas"; S.day = null;
+    S.trends = []; S.votos = []; S.videos = []; S.membros = []; S.profiles = {}; lastSig = "";
+    S.screen = "feed"; render(); loadAll();
+  }
+  async function shareInvite(g) {
+    const url = inviteUrl(g), text = `Entra no nosso grupo “${g.nome}” no Roteiro de Trends:`;
+    try { if (navigator.share) { await navigator.share({title:"Roteiro de Trends", text, url}); return; } } catch(e) { if (e && e.name === "AbortError") return; }
+    try { await navigator.clipboard.writeText(`${text} ${url}`); flash("Link de convite copiado"); }
+    catch(e) { S.sheet = {type:"grupo", showLink:true}; render(); }
   }
 
   // ——— Ações ———
@@ -149,7 +197,7 @@
       participantes:f.people, ref_link:safeTiktok(f.link) };
     const r = S.editing
       ? await S.sb.from("itens").update(row).eq("id", S.editing)
-      : await S.sb.from("itens").insert({id: uuid(), status:"a_gravar", ...row});
+      : await S.sb.from("itens").insert({id: uuid(), status:"a_gravar", grupo_id:S.grupo, ...row});
     S.busy = false;
     if (r.error) return fail(r.error, "Não salvou");
     const msg = S.editing ? "Trend atualizada" : `“${row.titulo}” entrou no roteiro de ${dayLabel(row.dia)}`;
@@ -179,7 +227,7 @@
     const up = await S.sb.storage.from("videos").upload(path, file, {contentType: file.type || "video/mp4"});
     if (up.error) return fail(up.error, "Vídeo não enviado");
     const trend = S.trends.find(t => t.id === itemId);
-    const r = await S.sb.from("videos").insert({path, item_id: itemId || null, titulo: trend ? trend.titulo : file.name.replace(/\.[^.]+$/, "").slice(0, 80)});
+    const r = await S.sb.from("videos").insert({path, grupo_id:S.grupo, item_id: itemId || null, titulo: trend ? trend.titulo : file.name.replace(/\.[^.]+$/, "").slice(0, 80)});
     if (r.error) { await S.sb.storage.from("videos").remove([path]); return fail(r.error, "Vídeo não salvo"); }
     await loadAll(); flash("Vídeo enviado para o grupo");
   }
@@ -208,19 +256,19 @@
   // ——— Telas ———
   function loginScreen() {
     return el("div",{class:"login"},
-      el("div",{class:"tag eyebrow"}, el("i"), "ARMY SP · SEMANA DO SHOW"),
+      el("div",{class:"tag eyebrow"}, el("i"), "SEMANA DO SHOW · SÃO PAULO"),
       el("div",{class:"mid"},
-        el("div",{class:"tour",text:"TURNÊ ARIRANG"}),
+        el("div",{class:"tour",text:"MORUMBIS · 28, 30 E 31/10"}),
         el("div",{class:"big",html:"Roteiro<br>de<br><span>trends</span>"}),
         el("div",{class:"bar"}),
-        el("p",{class:"lede",text:"Combinem, gravem e postem juntas até o dia 30/10 no MorumBIS."})),
+        el("p",{class:"lede",text:"Combinem, gravem e postem juntas até o dia do show. Cada grupo tem o seu espaço privado."})),
       el("div",{class:"stack",style:{gap:"14px"}},
         el("button",{class:"btn-white",disabled:S.busy,onclick:async () => {
           S.busy = true; render();
           const {error} = await S.sb.auth.signInWithOAuth({provider:"google", options:{redirectTo: location.origin + location.pathname}});
           if (error) { S.busy = false; fail(error, "Não entrou"); }
         }}, el("span",{class:"g",html:G_LOGO}), S.busy ? "Abrindo o Google…" : "Entrar com Google"),
-        el("div",{class:"foot",text:"só para o grupo"})));
+        el("div",{class:"foot",text: store.get("trends-convite") ? "você recebeu um convite · entre para participar" : "grátis · só o seu grupo vê o que vocês planejam"})));
   }
   function nameScreen() {
     const suggestion = (S.user && S.user.user_metadata && (S.user.user_metadata.full_name || S.user.user_metadata.name) || "").split(" ")[0];
@@ -231,7 +279,7 @@
       el("div",{class:"mid"},
         el("div",{class:"big",style:{fontSize:"52px"},html:"Como você<br>quer <span>aparecer?</span>"}),
         el("div",{class:"bar"}),
-        el("p",{class:"lede",text:"É esse nome que as meninas vão ver nas trends, nos votos e nos vídeos."}),
+        el("p",{class:"lede",text:"É esse nome que o seu grupo vai ver nas trends, nos votos e nos vídeos."}),
         el("label",{class:"field"}, el("span",{class:"eyebrow",text:"Seu nome ou apelido"}), input)),
       el("button",{class:"btn-red",disabled:S.busy,onclick:async () => {
         const nome = (S.nameDraft || "").trim(); if (!nome) return input.focus();
@@ -243,9 +291,57 @@
       }}, S.busy ? "Salvando…" : "Entrar no roteiro"));
   }
 
+  // Primeiro acesso sem grupo: criar o grupo ou entrar com código
+  const SHOW_DAYS = ["2026-10-28","2026-10-30","2026-10-31"];
+  function groupForm(onDone) {
+    if (!S.gform) S.gform = {nome:"", show:"2026-10-30", codigo:""};
+    const f = S.gform;
+    return [
+      el("label",{class:"field"}, el("span",{class:"eyebrow",text:"Nome do grupo"}),
+        el("input",{class:"input",id:"g-nome",maxlength:"40",value:f.nome,placeholder:"Ex.: Fila do portão B",oninput:e => f.nome = e.target.value})),
+      el("div",{class:"field"}, el("span",{class:"eyebrow",text:"Dia do show de vocês"}),
+        el("div",{class:"days",style:{gridTemplateColumns:"repeat(3,1fr)"}}, SHOW_DAYS.map(d =>
+          el("button",{class:"day" + (f.show === d ? " on" : ""),onclick:() => { f.show = d; render(); }}, el("small",{text:wd(d)}), el("b",{text:`${dd(d)}/10`}))))),
+      el("button",{class:"btn-red",disabled:S.busy,onclick:async () => {
+        if (!f.nome.trim()) return document.getElementById("g-nome").focus();
+        S.busy = true; render();
+        const r = await S.sb.rpc("criar_grupo", {p_nome: f.nome.trim(), p_show: f.show});
+        S.busy = false;
+        if (r.error) { render(); return flash(r.error.message); }
+        S.gform = null; S.grupos.push(r.data); switchGroup(r.data.id);
+        S.sheet = {type:"grupo", novo:true}; render();
+        if (onDone) onDone();
+      }}, S.busy ? "Criando…" : "Criar grupo"),
+      el("div",{class:"foot",style:{margin:"6px 0"},text:"— ou —"}),
+      el("label",{class:"field"}, el("span",{class:"eyebrow",text:"Tenho um código de convite"}),
+        el("div",{style:{display:"flex",gap:"8px"}},
+          el("input",{class:"input",id:"g-codigo",maxlength:"12",value:f.codigo,placeholder:"Ex.: 7F3A9C21",style:{textTransform:"uppercase"},oninput:e => f.codigo = e.target.value}),
+          el("button",{class:"btn-line",style:{flex:"none",padding:"0 18px"},disabled:S.busy,onclick:async () => {
+            const c = f.codigo.trim(); if (!c) return document.getElementById("g-codigo").focus();
+            S.busy = true; render();
+            const r = await S.sb.rpc("entrar_grupo", {p_codigo: c});
+            S.busy = false;
+            if (r.error) { render(); return flash(r.error.message); }
+            S.gform = null; if (!S.grupos.some(g => g.id === r.data.id)) S.grupos.push(r.data);
+            switchGroup(r.data.id); flash(`Você entrou no grupo “${r.data.nome}” 💜`);
+            if (onDone) onDone();
+          }}, "Entrar")))
+    ];
+  }
+  function noGroupScreen() {
+    return el("div",{class:"scroll"}, el("div",{class:"stack",style:{gap:"18px"}},
+      el("div",{}, el("div",{class:"eyebrow",style:{color:RED},text:`Oi, ${S.me.nome}!`}), el("h1",{class:"h1",text:"Seu grupo"})),
+      el("p",{class:"lede",style:{margin:0,color:"#D8D1CD"},text:"Crie o grupo de vocês e mande o link de convite para as amigas. Só quem estiver no grupo vê as trends, os votos e os nomes."}),
+      ...groupForm(),
+      el("button",{class:"lnk",style:{alignSelf:"center",marginTop:"8px"},onclick:async () => { await S.sb.auth.signOut(); }},"Sair")));
+  }
+  const groupPill = () => { const g = curGroup(); if (!g) return null;
+    return el("button",{class:"chip",style:{alignSelf:"flex-start",display:"flex",alignItems:"center",gap:"8px",height:"38px"},onclick:() => { S.sheet = {type:"grupo"}; render(); }},
+      el("span",{style:{width:"8px",height:"8px",borderRadius:"50%",background:PURPLE}}), g.nome, el("span",{text:`${groupSize()} ${groupSize() === 1 ? "pessoa" : "pessoas"} · convidar ▾`})); };
+
   function daysLeftText() {
-    const n = Math.round((dObj(SHOW) - dObj(todaySP())) / 864e5);
-    return n > 1 ? `FALTAM ${n} DIAS · 30/10` : n === 1 ? "FALTA 1 DIA · 30/10" : n === 0 ? "É HOJE · 30/10" : "DEPOIS DO SHOW · 30/10";
+    const sd = showDate(), lbl = `${dd(sd)}/${sd.slice(5,7)}`, n = Math.round((dObj(sd) - dObj(todaySP())) / 864e5);
+    return n > 1 ? `FALTAM ${n} DIAS · ${lbl}` : n === 1 ? `FALTA 1 DIA · ${lbl}` : n === 0 ? `É HOJE · ${lbl}` : `DEPOIS DO SHOW · ${lbl}`;
   }
   const meButton = () => { const [bg, fg] = colorOf(S.uid); return el("button",{class:"me",style:{background:bg,color:fg},"aria-label":"Minha conta",onclick:() => { S.sheet = {type:"conta"}; render(); }}, initial(S.uid)); };
   const statusBtn = t => el("button",{class:"st " + (t.status || "a_gravar"), disabled:!canStatus(t), title: canStatus(t) ? "Tocar para mudar o status" : "Só quem participa muda o status", onclick:() => cycle(t)}, ST[t.status || "a_gravar"]);
@@ -285,6 +381,7 @@
       el("div",{class:"head"},
         el("div",{}, el("div",{class:"eyebrow",style:{color:RED},text:daysLeftText()}), el("h1",{class:"h1",text:"Roteiro"})),
         meButton()),
+      groupPill(),
       installHint,
       el("div",{class:"chips"}, [["todas","Todas"],["a_gravar","A gravar"],["gravado","Gravado"],["postado","Postado"]].map(([k,l]) =>
         el("button",{class:"chip" + (S.filter === k ? " on" : ""), onclick:() => { S.filter = k; render(); }}, l + " ", el("span",{text:String(counts(k))})))),
@@ -303,7 +400,7 @@
             el("div",{class:"more"},
               el("a",{class:"lnk",href:gcalUrl(t),target:"_blank",rel:"noopener"},"+ Agenda"),
               t.local ? el("a",{class:"lnk",href:"https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent(t.local),target:"_blank",rel:"noopener"},"Mapa") : null,
-              el("button",{class:"lnk",onclick:() => { S.sheet = {type:"enviar", itemId:t.id}; render(); }},"Enviar vídeo"),
+              curGroup() && curGroup().videos_liberados ? el("button",{class:"lnk",onclick:() => { S.sheet = {type:"enviar", itemId:t.id}; render(); }},"Enviar vídeo") : null,
               t.owner === S.uid ? el("button",{class:"lnk",onclick:() => { S.sheet = {type:"trend", trend:t}; render(); }},"Editar") : null)));
       }) : el("div",{class:"empty",text: all.length ? "Nenhuma trend com esse status." : "Nenhuma trend ainda. Toque no + para adicionar a primeira."}));
   }
@@ -344,14 +441,18 @@
       el("div",{class:"head"},
         el("div",{}, el("div",{class:"eyebrow",style:{color:PURPLE},text:`${S.videos.length} ${S.videos.length === 1 ? "VÍDEO" : "VÍDEOS"} DO GRUPO`}), el("h1",{class:"h1",text:"Nossos vídeos"})),
         meButton()),
-      S.videosMissing ? el("div",{class:"empty",text:"A galeria ainda não foi ativada no banco. Rode o script schema-v2.sql no Supabase."}) : null,
-      el("button",{class:"upload",disabled:S.videosMissing,onclick:() => file.click()},"+ Enviar vídeo"), file,
+      S.videosMissing ? el("div",{class:"empty",text:"A galeria ainda não foi ativada no banco."}) : null,
+      curGroup() && curGroup().videos_liberados
+        ? [el("button",{class:"upload",disabled:S.videosMissing,onclick:() => file.click()},"+ Enviar vídeo"), file]
+        : el("div",{class:"install",style:{background:"#1A1717",borderColor:"#2E2929"}}, el("div",{},
+            el("b",{text:"Os vídeos de vocês ficam no TikTok"}),
+            "Gravou? Poste no TikTok e mude o status da trend para “Postado”. Assim todo mundo do grupo acompanha.")),
       S.videos.length ? el("div",{class:"grid2"}, S.videos.map(v => {
         const [bg, fg] = colorOf(v.owner);
         return el("button",{class:"vtile",onclick:() => { S.viewer = v; render(); }},
           el("video",{src:videoUrl(v.path) + "#t=0.1", muted:true, playsInline:true, preload:"metadata"}),
           el("div",{class:"cap"}, el("div",{class:"av",style:{background:bg,color:fg},text:initial(v.owner)}), el("div",{text:v.titulo || "Vídeo"})));
-      })) : (S.videosMissing ? null : el("div",{class:"empty",text:"Nenhum vídeo ainda. Grave uma trend e envie aqui."})));
+      })) : (S.videosMissing || !(curGroup() && curGroup().videos_liberados) ? null : el("div",{class:"empty",text:"Nenhum vídeo ainda. Grave uma trend e envie aqui."})));
   }
 
   function votacaoScreen() {
@@ -376,20 +477,20 @@
   }
 
   function agendaScreen() {
-    if (!S.day) S.day = DAYS.includes(todaySP()) ? todaySP() : SHOW;
+    if (!S.day) S.day = DAYS.includes(todaySP()) ? todaySP() : showDate();
     const items = S.trends.filter(t => t.dia === S.day);
     return el("div",{class:"stack"},
       el("div",{class:"head"},
         el("div",{}, el("div",{class:"eyebrow",style:{color:"#A39C98"},text:"26/10 — 01/11"}), el("h1",{class:"h1",text:"Agenda"})),
         meButton()),
       el("div",{class:"adays"}, DAYS.map(d => {
-        const on = S.day === d, has = S.trends.some(t => t.dia === d), show = d === SHOW;
+        const on = S.day === d, has = S.trends.some(t => t.dia === d), show = d === showDate();
         return el("button",{class:"aday" + (on ? " on" : "") + (show ? " show" : ""), onclick:() => { S.day = d; render(); }},
           el("small",{text:wd(d)}), el("b",{text:dd(d)}), el("i",{style:{background: has ? (on && !show ? INK : (show && on ? WHITE : PURPLE)) : "transparent"}}));
       })),
-      S.day === SHOW ? el("div",{class:"showcard"},
-        el("span",{class:"eyebrow",text:"Sexta 30/10 · dia do show"}),
-        el("span",{class:"big",html:"BTS · ARIRANG<br>MorumBIS"}),
+      S.day === showDate() ? el("div",{class:"showcard"},
+        el("span",{class:"eyebrow",text:`${dayLabel(showDate())} · dia do show`}),
+        el("span",{class:"big",html:"Dia do show<br>MorumBIS"}),
         el("span",{style:{fontSize:"14px"},text:"Portões 16h · show 20h · lightstick carregado"}),
         el("a",{href:"https://www.google.com/maps/dir/?api=1&destination=" + encodeURIComponent(VENUE),target:"_blank",rel:"noopener"},"Como chegar ↗")) : null,
       el("div",{class:"eyebrow",style:{color:"#A39C98"},text:`${dayLabel(S.day)} · ${items.length} ${items.length === 1 ? "trend" : "trends"}`}),
@@ -424,8 +525,38 @@
           if (error) return fail(error, "Nome não salvo");
           S.sheet = null; await loadAll(); flash("Nome atualizado");
         }},"Salvar nome"),
+        el("button",{class:"btn-line",onclick:() => { S.sheet = {type:"grupo"}; render(); }},"Meu grupo e convites"),
         el("button",{class:"btn-line",onclick:async () => { S.sheet = null; await S.sb.auth.signOut(); }},"Sair"),
         el("button",{class:"lnk danger",style:{alignSelf:"center",padding:"6px"},onclick:() => { S.sheet = {type:"excluir"}; render(); }},"Excluir minha conta")];
+    } else if (s.type === "grupo") {
+      const g = curGroup(); if (!g) { S.sheet = null; return null; }
+      const dono = g.owner === S.uid;
+      content = [
+        el("h3",{text: s.novo ? "Grupo criado! 💜" : g.nome}),
+        el("p",{style:{margin:0,fontSize:"14px",color:"#D8D1CD"},text: s.novo ? "Agora mande o link para as amigas. Só quem tiver o link entra, e só vocês veem o que está aqui." : `Show em ${dayLabel(g.show_dia)} · ${groupSize()} ${groupSize() === 1 ? "pessoa" : "pessoas"}`}),
+        el("button",{class:"btn-red",onclick:() => shareInvite(g)},"Convidar amigas"),
+        s.showLink ? el("input",{class:"input",readonly:true,value:inviteUrl(g),onfocus:e => e.target.select()}) : null,
+        el("div",{class:"mono",style:{fontSize:"12px",color:"#A39C98",textAlign:"center"},text:`código do grupo: ${g.codigo}`}),
+        el("div",{class:"people"}, orderedPeople().map(p => el("span",{class:"person",style:{cursor:"default"}}, av(p.id), p.nome + (p.id === g.owner ? " · criou" : "")))),
+        S.grupos.length > 1 ? el("label",{class:"field"}, el("span",{class:"eyebrow",text:"Trocar de grupo"}),
+          el("select",{class:"input",id:"g-troca",onchange:e => switchGroup(e.target.value)},
+            S.grupos.map(x => el("option",{value:x.id,selected:x.id === g.id,text:x.nome})))) : null,
+        el("button",{class:"btn-line",onclick:() => { S.sheet = {type:"novogrupo"}; render(); }},"Criar outro grupo ou entrar com código"),
+        dono
+          ? (s.confirm
+              ? el("button",{class:"btn-line danger",onclick:async () => {
+                  const {error} = await S.sb.from("grupos").delete().eq("id", g.id);
+                  if (error) return fail(error, "Não excluiu");
+                  S.grupos = S.grupos.filter(x => x.id !== g.id); switchGroup(S.grupos[0] ? S.grupos[0].id : null); flash("Grupo excluído");
+                }},"Confirmar: excluir o grupo e tudo dele")
+              : el("button",{class:"lnk danger",style:{alignSelf:"center",padding:"6px"},onclick:() => { s.confirm = true; render(); }},"Excluir grupo"))
+          : el("button",{class:"lnk danger",style:{alignSelf:"center",padding:"6px"},onclick:async () => {
+              const {error} = await S.sb.from("membros").delete().eq("grupo_id", g.id).eq("user_id", S.uid);
+              if (error) return fail(error, "Não saiu");
+              S.grupos = S.grupos.filter(x => x.id !== g.id); switchGroup(S.grupos[0] ? S.grupos[0].id : null); flash("Você saiu do grupo");
+            }},"Sair deste grupo")];
+    } else if (s.type === "novogrupo") {
+      content = [el("h3",{text:"Novo grupo"}), ...groupForm()];
     } else if (s.type === "excluir") {
       const mineCount = S.trends.filter(t => t.owner === S.uid).length, vidCount = S.videos.filter(v => v.owner === S.uid).length;
       content = [el("h3",{text:"Excluir minha conta"}),
@@ -491,7 +622,8 @@
     if (!S.sb) nodes = [el("div",{class:"login"}, el("div",{class:"mid"}, el("div",{class:"big",style:{fontSize:"40px"},text:"Sem conexão"}), el("p",{class:"lede",text:"Confira a internet e abra o app de novo."})))];
     else if (!S.uid) nodes = [loginScreen()];
     else if (!S.loaded) nodes = [el("div",{class:"login"}, el("div",{class:"mid"}, el("div",{class:"tour",text:"CARREGANDO"}), el("div",{class:"big",html:"Roteiro<br>de<br><span>trends</span>"})))];
-    else if (!S.me) nodes = [nameScreen()];
+    else if (!S.me) nodes = [nameScreen(), sheetLayer()];
+    else if (!S.grupo) nodes = [noGroupScreen()];
     else {
       if (S.screen === "nova" && !S.form) S.form = blankForm();
       const view = {feed:feedScreen, nova:novaScreen, videos:videosScreen, votacao:votacaoScreen, agenda:agendaScreen}[S.screen] || feedScreen;

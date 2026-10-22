@@ -1,7 +1,7 @@
 {
-  "name": "Roteiro de Trends · ARIRANG SP",
+  "name": "Roteiro de Trends",
   "short_name": "Trends SP",
-  "description": "O roteiro de trends da galera para a semana do show do BTS em São Paulo.",
+  "description": "Planejem, votem e gravem as trends do grupo na semana do show em São Paulo.",
   "lang": "pt-BR",
   "start_url": "./",
   "scope": "./",
