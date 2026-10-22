@@ -27,7 +27,7 @@
     sb:null, uid:null, user:null, me:null, loaded:false,
     grupos:[], grupo:null, membros:[],
     pubs:[], reacoes:[], minhasDen:new Set(), myPubs:{}, exOrdem:"alta", exDia:"todos", exLoaded:false,
-    profiles:{}, trends:[], votos:[], videos:[], videosMissing:false,
+    profiles:{}, trends:[], votos:[], videos:[], videosMissing:false, coments:[], reacItem:[], comMissing:false,
     screen:"feed", filter:"todas", day:null, toast:null,
     form:null, errors:{}, editing:null, sheet:null, viewer:null, busy:false
   };
@@ -137,13 +137,22 @@
         const joined = Object.fromEntries(m.data.map(x => [x.user_id, x.created_at]));
         S.profiles = Object.fromEntries((p.data || []).map(r => [r.id, {...r, created_at: joined[r.id] || r.created_at}]));
         S.trends = i.data;
-        const itemIds = new Set(i.data.map(t => t.id));
+        const idList = i.data.map(t => t.id);
+        if (idList.length) {
+          const [c, ri] = await Promise.all([
+            S.sb.from("comentarios").select("id,item_id,user_id,texto,created_at").in("item_id", idList).order("created_at"),
+            S.sb.from("reacoes_item").select("item_id,user_id,tipo").in("item_id", idList)
+          ]);
+          S.comMissing = !!(c.error || ri.error);
+          S.coments = c.data || []; S.reacItem = ri.data || [];
+        } else { S.coments = []; S.reacItem = []; }
+        const itemIds = new Set(idList);
         S.votos = v.data.filter(r => r.slot === r.item_id && itemIds.has(r.item_id));
         S.videosMissing = !!vid.error;
         S.videos = vid.error ? [] : vid.data;
       }
       S.loaded = true;
-      const sig = JSON.stringify([S.me, S.grupos, S.grupo, S.membros, S.profiles, S.trends, S.votos, S.videos]);
+      const sig = JSON.stringify([S.me, S.grupos, S.grupo, S.membros, S.profiles, S.trends, S.votos, S.videos, S.coments, S.reacItem]);
       if (sig !== lastSig) { lastSig = sig; softRender(); }
     } finally { loading = false; }
   }
@@ -311,6 +320,43 @@
     await loadAll(); loadExplorar();
     flash(`“${pub.titulo}” entrou no roteiro${g ? " de " + g.nome : ""} em ${dayLabel(dia)}`);
   }
+  async function reactItem(t, tipo) {
+    const mine = S.reacItem.some(r => r.item_id === t.id && r.user_id === S.uid && r.tipo === tipo);
+    S.reacItem = mine ? S.reacItem.filter(r => !(r.item_id === t.id && r.user_id === S.uid && r.tipo === tipo)) : [...S.reacItem, {item_id:t.id, user_id:S.uid, tipo}];
+    render();
+    const {error} = mine
+      ? await S.sb.from("reacoes_item").delete().eq("item_id", t.id).eq("user_id", S.uid).eq("tipo", tipo)
+      : await S.sb.from("reacoes_item").insert({item_id:t.id, user_id:S.uid, tipo});
+    if (error) { fail(error, "Reação não salva"); loadAll(); }
+  }
+  async function sendComment(s) {
+    const texto = (s.draft || "").trim(); if (!texto || S.busy) return;
+    S.busy = true; render();
+    const {error} = await S.sb.from("comentarios").insert({item_id:s.trend.id, user_id:S.uid, texto});
+    S.busy = false;
+    if (error) { render(); return flash(error.message); }
+    s.draft = ""; lastSig = ""; await loadAll(); render();
+    const list = document.querySelector(".comlist"); if (list) list.scrollTop = list.scrollHeight;
+  }
+  async function deleteComment(c) {
+    S.coments = S.coments.filter(x => x.id !== c.id); render();
+    const {error} = await S.sb.from("comentarios").delete().eq("id", c.id);
+    if (error) { fail(error, "Não apagou"); loadAll(); }
+  }
+  const quando = iso => new Intl.DateTimeFormat("pt-BR",{timeZone:"America/Sao_Paulo",day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"}).format(new Date(iso)).replace(",", " ·");
+  // Reações e comentários do grupo (só quem é do grupo vê)
+  function socialRow(t) {
+    if (S.comMissing) return null;
+    const n = S.coments.filter(c => c.item_id === t.id).length;
+    return el("div",{style:{display:"flex",gap:"8px",flexWrap:"wrap"}},
+      REACOES.map(([k, e]) => {
+        const on = S.reacItem.some(r => r.item_id === t.id && r.user_id === S.uid && r.tipo === k);
+        const c = S.reacItem.filter(r => r.item_id === t.id && r.tipo === k).length;
+        return el("button",{class:"chip" + (on ? " on" : ""),style:{height:"36px"},"aria-pressed":String(on),onclick:() => reactItem(t, k)}, e + (c ? " " : ""), c ? el("span",{text:String(c)}) : null);
+      }),
+      el("button",{class:"chip",style:{height:"36px",marginLeft:"auto"},onclick:() => { S.sheet = {type:"comentarios", trend:t, draft:""}; render(); }},
+        "💬 ", el("span",{text: n ? String(n) : "Comentar"})));
+  }
   async function deleteVideo(v) {
     S.viewer = null; render();
     await S.sb.storage.from("videos").remove([v.path]);
@@ -468,6 +514,7 @@
               statusBtn(t)),
             el("div",{class:"tags"}, el("span",{class:"tag mono",text:dayLabel(t.dia)}), t.local ? el("span",{class:"tag",text:t.local}) : null),
             el("div",{class:"crew"}, crew(ids), el("span",{text: ids.length && ids.length === groupSize() ? "o grupo todo" : `${ids.length} ${ids.length === 1 ? "vai" : "vão"} gravar · ideia de ${nameOf(t.owner)}`})),
+            socialRow(t),
             el("div",{class:"more"},
               el("a",{class:"lnk",href:gcalUrl(t),target:"_blank",rel:"noopener"},"+ Agenda"),
               t.local ? el("a",{class:"lnk",href:"https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent(t.local),target:"_blank",rel:"noopener"},"Mapa") : null,
@@ -713,6 +760,24 @@
         el("div",{class:"field"}, el("span",{class:"eyebrow",text:"Dia para gravar"}),
           el("div",{class:"days"}, DAYS.map(d => el("button",{class:"day" + (s.dia === d ? " on" : ""), onclick:() => { s.dia = d; render(); }}, el("small",{text:wd(d)}), el("b",{text:dd(d)}))))),
         el("button",{class:"btn-red",disabled:S.busy,onclick:() => usePub(p, s.grupo, s.dia)}, S.busy ? "Adicionando…" : "Adicionar ao roteiro")];
+    } else if (s.type === "comentarios") {
+      const t = S.trends.find(x => x.id === s.trend.id) || s.trend, g = curGroup(), admin = g && g.owner === S.uid;
+      const list = S.coments.filter(c => c.item_id === t.id);
+      content = [el("h3",{text:t.titulo}),
+        el("div",{class:"comlist",style:{maxHeight:"45vh",overflowY:"auto",display:"flex",flexDirection:"column",gap:"12px"}},
+          list.length ? list.map(c => el("div",{style:{display:"flex",gap:"10px",alignItems:"flex-start"}},
+            av(c.user_id),
+            el("div",{style:{minWidth:0,flex:1}},
+              el("div",{style:{display:"flex",gap:"8px",alignItems:"baseline",flexWrap:"wrap"}},
+                el("b",{style:{fontSize:"14px"},text:nameOf(c.user_id)}),
+                el("span",{class:"mono",style:{fontSize:"10.5px",color:"#7A7270"},text:quando(c.created_at)}),
+                (c.user_id === S.uid || admin) ? el("button",{class:"lnk danger",style:{fontSize:"12px",marginLeft:"auto"},onclick:() => deleteComment(c)},"apagar") : null),
+              el("div",{style:{fontSize:"15px",lineHeight:"1.4",color:"#D8D1CD",overflowWrap:"anywhere",whiteSpace:"pre-wrap"},text:c.texto}))))
+          : el("div",{class:"empty",style:{padding:"16px 0"},text:"Ninguém comentou ainda. Combine os detalhes aqui: quem leva o quê, onde encontrar, que horas gravar."})),
+        el("div",{style:{display:"flex",gap:"8px"}},
+          el("input",{class:"input",id:"com-texto",maxlength:"300",value:s.draft || "",placeholder:"Escreva um comentário…",autocomplete:"off",
+            oninput:e => s.draft = e.target.value, onkeydown:e => { if (e.key === "Enter") { e.preventDefault(); sendComment(s); } }}),
+          el("button",{class:"btn-red",style:{width:"auto",flex:"none",padding:"0 18px",height:"52px",fontSize:"15px"},disabled:S.busy,onclick:() => sendComment(s)}, S.busy ? "…" : "Enviar"))];
     } else if (s.type === "remover") {
       const g = curGroup(), n = S.trends.filter(t => t.owner === s.pessoa).length;
       content = [el("h3",{text:`Remover ${nameOf(s.pessoa)}?`}),
@@ -804,6 +869,7 @@
     }
     $root.replaceChildren(...nodes.filter(Boolean));
     const sc2 = document.querySelector(".scroll"); if (sc2) sc2.scrollTop = top;
+    const cl = document.querySelector(".comlist"); if (cl) cl.scrollTop = cl.scrollHeight;
     if (focusId) { const f = document.getElementById(focusId); if (f) { f.focus({preventScroll:true}); if (sel && "setSelectionRange" in f) try { f.setSelectionRange(sel[0], sel[1]); } catch(e) {} } }
   }
 
