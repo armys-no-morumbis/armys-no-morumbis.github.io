@@ -473,7 +473,8 @@
               t.local ? el("a",{class:"lnk",href:"https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent(t.local),target:"_blank",rel:"noopener"},"Mapa") : null,
               curGroup() && curGroup().videos_liberados ? el("button",{class:"lnk",onclick:() => { S.sheet = {type:"enviar", itemId:t.id}; render(); }},"Enviar vídeo") : null,
               t.owner === S.uid ? el("button",{class:"lnk",onclick:() => { S.sheet = {type:"trend", trend:t}; render(); }},"Editar") : null,
-              t.owner === S.uid && safeTiktok(t.ref_link)
+              t.copia_explorar ? el("span",{class:"lnk",style:{color:"#7A7270"},text:"veio do Explorar"}) : null,
+              t.owner === S.uid && safeTiktok(t.ref_link) && !t.copia_explorar
                 ? (S.myPubs[t.id]
                     ? el("button",{class:"lnk",style:{color: S.myPubs[t.id].oculta ? "#FF6B6B" : "#C9B3EE"},onclick:() => { S.sheet = {type:"publicada", trend:t}; render(); }}, S.myPubs[t.id].oculta ? "Oculta por denúncias" : "No Explorar ✓")
                     : el("button",{class:"lnk",style:{color:"#C9B3EE"},onclick:() => { S.sheet = {type:"publicar", trend:t}; render(); }},"Mostrar no Explorar"))
