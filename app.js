@@ -111,7 +111,7 @@
       S.grupos = gq.data;
       const convite = store.get("trends-convite");
       if (convite && S.me) {
-        store.set("trends-convite", null);
+        store.set("trends-convite", null); S.convitePrev = null;
         const r = await S.sb.rpc("entrar_grupo", {p_codigo: convite});
         if (r.error) flash(r.error.message);
         else {
@@ -201,7 +201,7 @@
     S.screen = "feed"; render(); loadAll();
   }
   async function shareInvite(g) {
-    const url = inviteUrl(g), text = `Entra no nosso grupo “${g.nome}” no Roteiro de Trends:`;
+    const url = inviteUrl(g), text = `Entra no nosso grupo “${g.nome}” no Roteiro de Trends! Código: ${fmtCode(g.codigo)}`;
     try { if (navigator.share) { await navigator.share({title:"Roteiro de Trends", text, url}); return; } } catch(e) { if (e && e.name === "AbortError") return; }
     try { await navigator.clipboard.writeText(`${text} ${url}`); flash("Link de convite copiado"); }
     catch(e) { S.sheet = {type:"grupo", showLink:true}; render(); }
@@ -319,6 +319,7 @@
     S.busy = false; S.sheet = null;
     if (error) { render(); return flash(error.message); }
     const g = S.grupos.find(x => x.id === grupoId);
+    { const u = usados(); u.add(usadoKey(pub.id, grupoId)); store.set("trends-usados", JSON.stringify([...u].slice(-300))); }
     if (grupoId !== S.grupo) switchGroup(grupoId); else { S.screen = "feed"; S.filter = "todas"; render(); }
     await loadAll(); loadExplorar();
     flash(`“${pub.titulo}” entrou no roteiro${g ? " de " + g.nome : ""} em ${dayLabel(dia)}`);
@@ -378,7 +379,35 @@
   }
 
   // ——— Telas ———
+  // ——— Entrada: convite, login, nome, grupo e "grupo criado" (design do Claude Design) ———
+  const fmtCode = c => c ? `${c.slice(0,4)}-${c.slice(4)}` : "";
+  const SHOW_DAYS = ["2026-10-28","2026-10-30","2026-10-31"];
+  const googleLogin = async () => {
+    S.busy = true; render();
+    const {error} = await S.sb.auth.signInWithOAuth({provider:"google", options:{redirectTo: location.origin + location.pathname}});
+    if (error) { S.busy = false; fail(error, "Não entrou"); }
+  };
+  const gBtn = label => el("button",{class:"btn-white",disabled:S.busy,onclick:googleLogin}, el("span",{class:"g",html:G_LOGO}), S.busy ? "Abrindo o Google…" : label);
+  function conviteScreen() {
+    const p = S.convitePrev, n = Number(p.membros) || 0;
+    return el("div",{class:"login"},
+      el("div",{class:"tag eyebrow"}, el("i"), "CONVITE · ROTEIRO DE TRENDS"),
+      el("div",{class:"mid",style:{gap:"22px"}},
+        el("div",{style:{display:"flex"}}, PALETTE.slice(0, Math.min(5, Math.max(1, n))).map(([bg]) =>
+          el("div",{style:{width:"52px",height:"52px",marginRight:"-12px",borderRadius:"50%",border:"3px solid #0E0C0C",background:bg}}))),
+        el("div",{style:{display:"flex",flexDirection:"column",gap:"6px"}},
+          el("div",{style:{fontSize:"20px",fontWeight:600,color:"#D8D1CD"},text:"Você recebeu um convite para o grupo"}),
+          el("div",{style:{fontSize:"58px",lineHeight:".9",fontWeight:900,fontStretch:"72%",textTransform:"uppercase",color:RED,overflowWrap:"anywhere"},text:p.nome})),
+        el("div",{class:"bar"}),
+        el("div",{style:{display:"flex",gap:"8px",flexWrap:"wrap"}},
+          el("span",{class:"pilltag",text: n === 1 ? "1 PESSOA JÁ ESTÁ LÁ" : `${n} PESSOAS JÁ ESTÃO LÁ`}),
+          el("span",{class:"pilltag",text:`SHOW ${dd(p.show_dia)}/10 · MORUMBIS`}))),
+      el("div",{class:"stack",style:{gap:"14px"}},
+        gBtn("Entrar com Google e participar"),
+        el("button",{class:"lnk",style:{alignSelf:"center",padding:"6px"},onclick:() => { S.convitePrev = null; store.set("trends-convite", null); render(); }},"Não recebi convite")));
+  }
   function loginScreen() {
+    if (S.convitePrev) return conviteScreen();
     return el("div",{class:"login"},
       el("div",{class:"tag eyebrow"}, el("i"), "SEMANA DO SHOW · SÃO PAULO"),
       el("div",{class:"mid"},
@@ -387,77 +416,108 @@
         el("div",{class:"bar"}),
         el("p",{class:"lede",text:"Combinem, gravem e postem juntas até o dia do show. Cada grupo tem o seu espaço privado."})),
       el("div",{class:"stack",style:{gap:"14px"}},
-        el("button",{class:"btn-white",disabled:S.busy,onclick:async () => {
-          S.busy = true; render();
-          const {error} = await S.sb.auth.signInWithOAuth({provider:"google", options:{redirectTo: location.origin + location.pathname}});
-          if (error) { S.busy = false; fail(error, "Não entrou"); }
-        }}, el("span",{class:"g",html:G_LOGO}), S.busy ? "Abrindo o Google…" : "Entrar com Google"),
-        el("div",{class:"foot",text: store.get("trends-convite") ? "você recebeu um convite · entre para participar" : "grátis · só o seu grupo vê o que vocês planejam"})));
+        gBtn("Entrar com Google"),
+        el("div",{class:"foot",text: S.conviteInvalido ? "esse convite não vale mais · peça o link de novo" : "grátis · só o seu grupo vê o que vocês planejam"})));
   }
   function nameScreen() {
     const suggestion = (S.user && S.user.user_metadata && (S.user.user_metadata.full_name || S.user.user_metadata.name) || "").split(" ")[0];
     if (S.nameDraft == null) S.nameDraft = S.me ? S.me.nome : suggestion;
-    const input = el("input",{class:"input",id:"n-nome",maxlength:"40",value:S.nameDraft,placeholder:"Ex.: Ju",oninput:e => S.nameDraft = e.target.value});
+    const nm = (S.nameDraft || "").trim();
+    const kicker = S.convitePrev ? `ENTRANDO NO GRUPO ${S.convitePrev.nome.toUpperCase()}` : "PRIMEIRO ACESSO";
+    const save = async () => {
+      const nome = (S.nameDraft || "").trim(); if (!nome) return document.getElementById("n-nome").focus();
+      S.busy = true; render();
+      const {error} = await S.sb.from("profiles").upsert({id:S.uid, nome});
+      S.busy = false;
+      if (error) { render(); return flash(error.message || "Nome não salvo"); }
+      await loadAll(); flash(`Oi, ${nome}!`);
+    };
     return el("div",{class:"login"},
-      el("div",{class:"tag eyebrow"}, el("i"), "QUASE LÁ"),
-      el("div",{class:"mid"},
-        el("div",{class:"big",style:{fontSize:"52px"},html:"Como você<br>quer <span>aparecer?</span>"}),
-        el("div",{class:"bar"}),
-        el("p",{class:"lede",text:"É esse nome que o seu grupo vai ver nas trends, nos votos e nos vídeos."}),
-        el("label",{class:"field"}, el("span",{class:"eyebrow",text:"Seu nome ou apelido"}), input)),
-      el("button",{class:"btn-red",disabled:S.busy,onclick:async () => {
-        const nome = (S.nameDraft || "").trim(); if (!nome) return input.focus();
-        S.busy = true; render();
-        const {error} = await S.sb.from("profiles").upsert({id:S.uid, nome});
-        S.busy = false;
-        if (error) return fail(error, "Nome não salvo");
-        await loadAll(); flash(`Oi, ${nome}!`);
-      }}, S.busy ? "Salvando…" : "Entrar no roteiro"));
+      el("div",{class:"eyebrow",style:{color:"#A39C98",overflowWrap:"anywhere"},text:kicker}),
+      el("div",{class:"mid",style:{gap:"24px"}},
+        el("div",{class:"big",style:{fontSize:"52px",lineHeight:".9"},html:"Como você quer <span>aparecer?</span>"}),
+        el("div",{style:{display:"flex",alignItems:"center",gap:"16px"}},
+          el("div",{id:"n-av",style:{flex:"none",width:"72px",height:"72px",borderRadius:"50%",background:RED,border:"3px solid " + PURPLE,display:"flex",alignItems:"center",justifyContent:"center",fontSize:"30px",fontWeight:900},text:(nm[0] || "?").toUpperCase()}),
+          el("div",{style:{fontSize:"15px",lineHeight:"1.4",color:"#A39C98"},text:"É assim que o seu grupo vai te ver no roteiro, nos votos e nos comentários."})),
+        el("label",{class:"field"}, el("span",{class:"eyebrow",text:"Seu nome ou apelido"}),
+          el("input",{class:"input big",id:"n-nome",maxlength:"40",value:S.nameDraft,placeholder:"Ex.: Ju",autocomplete:"nickname",
+            oninput:e => { S.nameDraft = e.target.value; const v = e.target.value.trim(), a = document.getElementById("n-av"), b = document.getElementById("n-go");
+              if (a) a.textContent = (v[0] || "?").toUpperCase(); if (b) b.classList.toggle("off", !v); },
+            onkeydown:e => { if (e.key === "Enter") save(); }}))),
+      el("button",{class:"btn-red" + (nm ? "" : " off"),id:"n-go",disabled:S.busy,onclick:save}, S.busy ? "Salvando…" : "Continuar"));
   }
-
-  // Primeiro acesso sem grupo: criar o grupo ou entrar com código
-  const SHOW_DAYS = ["2026-10-28","2026-10-30","2026-10-31"];
-  function groupForm(onDone) {
-    if (!S.gform) S.gform = {nome:"", show:"2026-10-30", codigo:""};
-    const f = S.gform;
-    return [
+  // Criar grupo ou entrar com código (tela cheia no primeiro acesso, ou dentro da janela "Novo grupo")
+  function groupChooser() {
+    if (!S.gform) S.gform = {modo:"criar", nome:"", show:"2026-10-30", codigo:"", err:null};
+    const f = S.gform, criar = f.modo === "criar";
+    const tabs = el("div",{class:"seg"},
+      el("button",{class:criar ? "on" : "",onclick:() => { f.modo = "criar"; f.err = null; render(); }},"Criar grupo"),
+      el("button",{class:criar ? "" : "on",onclick:() => { f.modo = "codigo"; f.err = null; render(); }},"Tenho um código"));
+    const body = criar ? [
       el("label",{class:"field"}, el("span",{class:"eyebrow",text:"Nome do grupo"}),
-        el("input",{class:"input",id:"g-nome",maxlength:"40",value:f.nome,placeholder:"Ex.: Fila do portão B",oninput:e => f.nome = e.target.value})),
-      el("div",{class:"field"}, el("span",{class:"eyebrow",text:"Dia do show de vocês"}),
-        el("div",{class:"days",style:{gridTemplateColumns:"repeat(3,1fr)"}}, SHOW_DAYS.map(d =>
-          el("button",{class:"day" + (f.show === d ? " on" : ""),onclick:() => { f.show = d; render(); }}, el("small",{text:wd(d)}), el("b",{text:`${dd(d)}/10`}))))),
+        el("input",{class:"input big" + (f.err ? " bad" : ""),id:"g-nome",maxlength:"40",value:f.nome,placeholder:"Ex.: Fila do portão B",oninput:e => { f.nome = e.target.value; }}),
+        f.err ? el("span",{class:"err",text:f.err}) : null),
+      el("div",{class:"field"}, el("span",{class:"eyebrow",text:"Dia do show"}),
+        el("div",{class:"days",style:{gridTemplateColumns:"repeat(3,1fr)",gap:"8px"}}, SHOW_DAYS.map(d =>
+          el("button",{class:"day" + (f.show === d ? " on" : ""),style:{height:"72px"},onclick:() => { f.show = d; render(); }},
+            el("small",{text:wd(d)}), el("b",{style:{fontSize:"24px",fontWeight:900,fontStretch:"80%"},text:`${dd(d)}/10`}))))),
+      el("div",{style:{flex:1}}),
       el("button",{class:"btn-red",disabled:S.busy,onclick:async () => {
-        if (!f.nome.trim()) return document.getElementById("g-nome").focus();
+        if (!f.nome.trim()) { f.err = "Dê um nome para o grupo."; render(); return; }
         S.busy = true; render();
         const r = await S.sb.rpc("criar_grupo", {p_nome: f.nome.trim(), p_show: f.show});
         S.busy = false;
-        if (r.error) { render(); return flash(r.error.message); }
+        if (r.error) { f.err = r.error.message; render(); return; }
         S.gform = null; S.grupos.push(r.data); switchGroup(r.data.id);
-        S.sheet = {type:"grupo", novo:true}; render();
-        if (onDone) onDone();
-      }}, S.busy ? "Criando…" : "Criar grupo"),
-      el("div",{class:"foot",style:{margin:"6px 0"},text:"— ou —"}),
-      el("label",{class:"field"}, el("span",{class:"eyebrow",text:"Tenho um código de convite"}),
-        el("div",{style:{display:"flex",gap:"8px"}},
-          el("input",{class:"input",id:"g-codigo",maxlength:"12",value:f.codigo,placeholder:"Ex.: 7F3A9C21",style:{textTransform:"uppercase"},oninput:e => f.codigo = e.target.value}),
-          el("button",{class:"btn-line",style:{flex:"none",padding:"0 18px"},disabled:S.busy,onclick:async () => {
-            const c = f.codigo.trim(); if (!c) return document.getElementById("g-codigo").focus();
-            S.busy = true; render();
-            const r = await S.sb.rpc("entrar_grupo", {p_codigo: c});
-            S.busy = false;
-            if (r.error) { render(); return flash(r.error.message); }
-            S.gform = null; if (!S.grupos.some(g => g.id === r.data.id)) S.grupos.push(r.data);
-            switchGroup(r.data.id); flash(`Você entrou no grupo “${r.data.nome}” 💜`);
-            if (onDone) onDone();
-          }}, "Entrar")))
+        S.criado = r.data; render();
+      }}, S.busy ? "Criando…" : "Criar grupo")
+    ] : [
+      el("label",{class:"field"}, el("span",{class:"eyebrow",text:"Código do grupo"}),
+        el("input",{class:"input code" + (f.err ? " bad" : ""),id:"g-codigo",maxlength:"9",value:f.codigo,placeholder:"0000-0000",autocomplete:"off",
+          oninput:e => { f.codigo = e.target.value.toUpperCase(); e.target.value = f.codigo; }}),
+        f.err ? el("span",{class:"err",text:f.err}) : null),
+      el("div",{style:{fontSize:"14px",lineHeight:"1.4",color:"#A39C98"},text:"Peça o código para quem criou o grupo. Ele aparece na tela de convite."}),
+      el("div",{style:{flex:1}}),
+      el("button",{class:"btn-red",disabled:S.busy,onclick:async () => {
+        const c = f.codigo.replace(/[^A-Z0-9]/gi, "");
+        if (c.length !== 8) { f.err = "O código tem 8 letras ou números."; render(); return; }
+        S.busy = true; render();
+        const r = await S.sb.rpc("entrar_grupo", {p_codigo: c});
+        S.busy = false;
+        if (r.error) { f.err = r.error.message; render(); return; }
+        S.gform = null; if (!S.grupos.some(g => g.id === r.data.id)) S.grupos.push(r.data);
+        switchGroup(r.data.id); flash(`Você entrou no grupo “${r.data.nome}” 💜`);
+      }}, S.busy ? "Entrando…" : "Entrar no grupo")
     ];
+    return {title: criar ? "Crie seu grupo" : "Entre com o código", tabs, body};
   }
   function noGroupScreen() {
-    return el("div",{class:"scroll"}, el("div",{class:"stack",style:{gap:"18px"}},
-      el("div",{}, el("div",{class:"eyebrow",style:{color:RED},text:`Oi, ${S.me.nome}!`}), el("h1",{class:"h1",text:"Seu grupo"})),
-      el("p",{class:"lede",style:{margin:0,color:"#D8D1CD"},text:"Crie o grupo de vocês e mande o link de convite para as amigas. Só quem estiver no grupo vê as trends, os votos e os nomes."}),
-      ...groupForm(),
-      el("button",{class:"lnk",style:{alignSelf:"center",marginTop:"8px"},onclick:async () => { await S.sb.auth.signOut(); }},"Sair")));
+    const g = groupChooser();
+    return el("div",{class:"login",style:{gap:"22px",justifyContent:"flex-start",overflowY:"auto"}},
+      el("div",{class:"eyebrow",style:{color:"#A39C98"},text:`OLÁ, ${S.me.nome.toUpperCase()}`}),
+      el("div",{class:"big",style:{fontSize:"52px",lineHeight:".9"},text:g.title}),
+      g.tabs, ...g.body,
+      el("button",{class:"lnk",style:{alignSelf:"center"},onclick:async () => { await S.sb.auth.signOut(); }},"Sair"));
+  }
+  function criadoScreen() {
+    const g = S.criado;
+    return el("div",{class:"login"},
+      el("div",{class:"mid",style:{gap:"22px"}},
+        el("div",{style:{width:"76px",height:"76px",borderRadius:"50%",background:RED,display:"flex",alignItems:"center",justifyContent:"center",fontSize:"38px",fontWeight:900},text:"✓"}),
+        el("div",{class:"big",style:{fontSize:"60px"},html:"Grupo<br>criado!"}),
+        el("div",{style:{display:"flex",flexDirection:"column",gap:"4px"}},
+          el("span",{style:{fontSize:"24px",fontWeight:800,fontStretch:"80%",color:"#C9B3EE",overflowWrap:"anywhere"},text:g.nome}),
+          el("span",{class:"mono",style:{fontSize:"12px",color:"#A39C98"},text:`SHOW ${dd(g.show_dia)}/10 · MORUMBIS`})),
+        el("div",{class:"codebox"},
+          el("div",{style:{display:"flex",flexDirection:"column",gap:"6px"}},
+            el("span",{class:"eyebrow",style:{fontSize:"10px",color:"#A39C98"},text:"Código do grupo"}),
+            el("span",{class:"mono",style:{fontSize:"28px",fontWeight:600,letterSpacing:".1em"},text:fmtCode(g.codigo)})),
+          el("button",{class:"btn-line",style:{height:"40px",padding:"0 14px",borderColor:PURPLE,fontSize:"14px"},onclick:async () => {
+            try { await navigator.clipboard.writeText(fmtCode(g.codigo)); flash("Código copiado"); } catch(e) { flash(`Código: ${fmtCode(g.codigo)}`); }
+          }},"Copiar"))),
+      el("div",{class:"stack",style:{gap:"12px"}},
+        el("button",{class:"btn-red",style:{height:"68px",fontSize:"20px",fontWeight:900,fontStretch:"85%",textTransform:"uppercase",letterSpacing:".02em"},onclick:() => shareInvite(g)},"Convidar amigas"),
+        el("button",{class:"lnk",style:{alignSelf:"center",padding:"6px"},onclick:() => { S.criado = null; S.screen = "feed"; render(); }},"Ir para o roteiro")));
   }
   const groupPill = () => { const g = curGroup(); if (!g) return null;
     return el("button",{class:"chip",style:{alignSelf:"flex-start",display:"flex",alignItems:"center",gap:"8px",height:"38px"},onclick:() => { S.sheet = {type:"grupo"}; render(); }},
@@ -506,7 +566,7 @@
         el("div",{}, el("div",{class:"eyebrow",style:{color:RED},text:daysLeftText()}), el("h1",{class:"h1",text:"Roteiro"})),
         meButton()),
       el("div",{style:{display:"flex",gap:"8px",flexWrap:"wrap"}}, groupPill(),
-        curGroup() && curGroup().videos_liberados ? el("button",{class:"chip",style:{height:"38px"},onclick:() => go("videos")},"▶ Vídeos do grupo") : null),
+        null),
       installHint,
       el("div",{class:"chips"},
         el("button",{class:"chip" + (S.onlyMine ? " on" : ""), style:{borderColor: S.onlyMine ? null : PURPLE}, "aria-pressed":String(!!S.onlyMine),
@@ -542,46 +602,60 @@
   }
 
   const REACOES = [["roxo","💜"],["fogo","🔥"],["riso","😂"]];
+  const atras = iso => {
+    const m = Math.max(1, Math.round((Date.now() - new Date(iso).getTime()) / 60000));
+    if (m < 60) return `há ${m} min`;
+    const h = Math.round(m / 60); if (h < 24) return `há ${h} h`;
+    const d = Math.round(h / 24); return d === 1 ? "há 1 dia" : `há ${d} dias`;
+  };
+  const fmtNum = n => n >= 1000 ? (n / 1000).toFixed(1).replace(".", ",") + " mil" : String(n);
+  const usadoKey = (pubId, grupoId) => `${pubId}|${grupoId}`;
+  const usados = () => { try { return new Set(JSON.parse(store.get("trends-usados") || "[]")); } catch(e) { return new Set(); } };
   function explorarScreen() {
     if (!S.exLoaded) loadExplorar();
     const count = (id, tipo) => S.reacoes.filter(r => r.pub_id === id && (!tipo || r.tipo === tipo)).length;
     let list = S.pubs.filter(p => S.exDia === "todos" || p.show_dia === S.exDia);
     if (S.exOrdem === "alta") list = [...list].sort((a,b) => (count(b.id) + 2 * b.usos) - (count(a.id) + 2 * a.usos) || b.created_at.localeCompare(a.created_at));
-    const chip = (on, label, fn) => el("button",{class:"chip" + (on ? " on" : ""), onclick:fn}, label);
-    return el("div",{class:"stack"},
+    const usou = usados();
+    const dayChip = (k, label) => el("button",{class:"chip" + (S.exDia === k ? " on" : ""), style:{whiteSpace:"nowrap"}, onclick:() => { S.exDia = k; render(); }}, label);
+    return el("div",{class:"stack",style:{gap:"14px"}},
       el("div",{class:"head"},
         el("div",{}, el("div",{class:"eyebrow",style:{color:PURPLE},text:"Trends de todos os grupos"}), el("h1",{class:"h1",text:"Explorar"})),
         meButton()),
-      el("div",{class:"chips"},
-        chip(S.exOrdem === "alta", "🔥 Em alta", () => { S.exOrdem = "alta"; render(); }),
-        chip(S.exOrdem === "recentes", "Recentes", () => { S.exOrdem = "recentes"; render(); }),
-        chip(S.exDia === "todos", "Todos os shows", () => { S.exDia = "todos"; render(); }),
-        SHOW_DAYS.map(d => chip(S.exDia === d, `Show ${dd(d)}/10`, () => { S.exDia = d; render(); }))),
+      el("div",{class:"seg",style:{gridTemplateColumns:"1fr 1fr"}},
+        el("button",{class:S.exOrdem === "alta" ? "on" : "",style:{height:"38px",fontSize:"14px"},onclick:() => { S.exOrdem = "alta"; render(); }},"Em alta"),
+        el("button",{class:S.exOrdem === "recentes" ? "on" : "",style:{height:"38px",fontSize:"14px"},onclick:() => { S.exOrdem = "recentes"; render(); }},"Recentes")),
+      el("div",{class:"chips"}, dayChip("todos","Todos os dias"), SHOW_DAYS.map(d => dayChip(d, `${dd(d)}/10`))),
       S.exMissing ? el("div",{class:"empty",text:"O Explorar ainda não foi ativado no banco."})
       : !S.exLoaded ? el("div",{class:"empty",text:"Carregando as trends…"})
       : list.length ? list.map(p => {
           const id = tiktokId(p.ref_link), mine = p.owner === S.uid, denunciada = S.minhasDen.has(p.id);
+          const used = usou.has(usadoKey(p.id, S.grupo));
+          const usos = p.usos;
           return el("article",{class:"card"},
-            id ? tiktokPlayer(id) : media(p),
-            el("div",{class:"body"},
-              el("div",{style:{display:"flex",flexDirection:"column",gap:"4px"}},
-                el("div",{class:"tname",text:p.titulo}),
-                p.musica ? el("div",{class:"song",text:"♪ " + p.musica}) : null),
-              el("div",{class:"tags"},
-                el("span",{class:"tag mono",text:`grupo do show ${dd(p.show_dia)}/10`}),
-                p.usos ? el("span",{class:"tag",text:`usada por ${p.usos} ${p.usos === 1 ? "grupo" : "grupos"}`}) : null,
-                mine ? el("span",{class:"tag",style:{color:"#C9B3EE"},text:"sua publicação"}) : null),
-              el("div",{style:{display:"flex",gap:"8px"}}, REACOES.map(([k, e]) => {
-                const on = S.reacoes.some(r => r.pub_id === p.id && r.user_id === S.uid && r.tipo === k), n = count(p.id, k);
-                return el("button",{class:"chip" + (on ? " on" : ""), style:{height:"40px",fontSize:"16px"}, "aria-pressed":String(on), onclick:() => react(p, k)}, e + " ", el("span",{text:String(n)}));
+            el("div",{class:"exmedia"},
+              id ? el("iframe",{src:`https://www.tiktok.com/player/v1/${id}?autoplay=0&music_info=0&description=0&rel=0`,
+                    allow:"encrypted-media; fullscreen; picture-in-picture", allowfullscreen:true, loading:"lazy", title:"Vídeo do TikTok"})
+                 : el("a",{class:"poster",style:{position:"absolute",inset:0,aspectRatio:"auto"},href:safeTiktok(p.ref_link) || "#",target:"_blank",rel:"noopener noreferrer"},
+                    el("div",{class:"playb",text:"▶"})),
+              el("div",{class:"exbadges"}, el("span",{text:dayLabel(p.show_dia)}), el("span",{class:"dim",text:atras(p.created_at)})),
+              el("div",{class:"exreacts"}, REACOES.map(([k, e]) => {
+                const on = S.reacoes.some(r => r.pub_id === p.id && r.user_id === S.uid && r.tipo === k);
+                return el("button",{class:on ? "on" : "","aria-pressed":String(on),"aria-label":`Reagir ${e}`,onclick:() => react(p, k)},
+                  el("span",{class:"e",text:e}), el("span",{class:"n",text:fmtNum(count(p.id, k))}));
               })),
-              el("button",{class:"btn-red",style:{height:"48px",fontSize:"15px"},onclick:() => { S.sheet = {type:"usar", pub:p, grupo:S.grupo, dia: DAYS.includes(todaySP()) ? todaySP() : showDate()}; render(); }},"Usar no meu grupo"),
-              el("div",{class:"more"},
-                mine ? el("button",{class:"lnk",onclick:() => unpublish(p.id)},"Tirar do Explorar")
-                  : denunciada ? el("span",{class:"lnk",text:"Você denunciou"})
-                  : el("button",{class:"lnk",onclick:() => { S.sheet = {type:"denunciar", pub:p}; render(); }},"Denunciar"))));
+              el("div",{class:"extitle"},
+                el("div",{class:"tname",text:p.titulo}),
+                p.musica ? el("div",{class:"song",text:"♪ " + p.musica}) : null)),
+            el("div",{style:{padding:"14px 16px 12px",display:"flex",flexDirection:"column",gap:"10px"}},
+              el("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",gap:"12px"}},
+                el("span",{class:"mono",style:{fontSize:"12px",color:"#D8D1CD"},text: usos ? `usada por ${usos} ${usos === 1 ? "grupo" : "grupos"}` : "seja o primeiro grupo a usar"}),
+                el("button",{class:"usebtn" + (used ? " used" : ""),onclick:() => { if (used) return; S.sheet = {type:"usar", pub:p, grupo:S.grupo, dia: DAYS.includes(todaySP()) ? todaySP() : showDate()}; render(); }},
+                  used ? "No roteiro ✓" : "Usar no meu grupo")),
+              mine ? el("button",{class:"reportlnk",onclick:() => unpublish(p.id)},"Sua publicação · tirar do Explorar")
+                : el("button",{class:"reportlnk",disabled:denunciada,onclick:() => { if (!denunciada) { S.sheet = {type:"denunciar", pub:p}; render(); } }}, denunciada ? "Denunciada" : "Denunciar")));
         })
-      : el("div",{class:"empty",text:"Nenhuma trend publicada ainda. No Roteiro, toque em “Mostrar no Explorar” numa trend do seu grupo para ser a primeira!"}));
+      : el("div",{class:"empty",text: S.pubs.length ? "Nenhuma trend para esse dia ainda." : "Nenhuma trend publicada ainda. No Roteiro, toque em “Mostrar no Explorar” numa trend do seu grupo para ser a primeira!"}));
   }
 
   function novaScreen() {
@@ -684,8 +758,9 @@
   }
 
   function navBar() {
-    const def = [["feed","Roteiro"],["explorar","Explorar"],["nova","Nova"],["votacao","Votação"],["agenda","Agenda"]];
-    return el("nav",{class:"nav"}, def.map(([k,l]) =>
+    const def = [["feed","Roteiro"],["agenda","Agenda"],["nova","Nova"],["explorar","Explorar"],["votacao","Votação"]];
+    if (curGroup() && curGroup().videos_liberados) def.push(["videos","Vídeos"]);
+    return el("nav",{class:"nav",style:{gridTemplateColumns:`repeat(${def.length},1fr)`}}, def.map(([k,l]) =>
       el("button",{class:(S.screen === k ? "on" : "") + (k === "nova" ? " plus" : ""), onclick:() => { if (k === "nova") { S.form = null; S.editing = null; } go(k); }},
         el("span",{class:"ic",html:ICONS[k]}), el("span",{text:l}))));
   }
@@ -715,7 +790,7 @@
         el("p",{style:{margin:0,fontSize:"14px",color:"#D8D1CD"},text: s.novo ? "Agora mande o link para as amigas. Só quem tiver o link entra, e só vocês veem o que está aqui." : `Show em ${dayLabel(g.show_dia)} · ${groupSize()} ${groupSize() === 1 ? "pessoa" : "pessoas"}`}),
         el("button",{class:"btn-red",onclick:() => shareInvite(g)},"Convidar amigas"),
         s.showLink ? el("input",{class:"input",readonly:true,value:inviteUrl(g),onfocus:e => e.target.select()}) : null,
-        el("div",{class:"mono",style:{fontSize:"12px",color:"#A39C98",textAlign:"center"},text:`código do grupo: ${g.codigo}`}),
+        el("div",{class:"mono",style:{fontSize:"12px",color:"#A39C98",textAlign:"center"},text:`código do grupo: ${fmtCode(g.codigo)}`}),
         el("div",{class:"people"}, orderedPeople().map(p =>
           dono && p.id !== S.uid
             ? el("button",{class:"person",title:"Remover do grupo",onclick:() => { S.sheet = {type:"remover", pessoa:p.id, apagar:false}; render(); }}, av(p.id), p.nome, el("span",{style:{color:"#FF6B6B",fontSize:"16px",marginLeft:"2px"},text:"×"}))
@@ -816,7 +891,7 @@
           S.sheet = {type:"grupo"}; await loadAll(); render(); flash(`${nome} saiu do grupo`);
         }}, S.busy ? "Removendo…" : "Remover do grupo")];
     } else if (s.type === "novogrupo") {
-      content = [el("h3",{text:"Novo grupo"}), ...groupForm()];
+      const gc = groupChooser(); content = [el("h3",{text:gc.title}), gc.tabs, ...gc.body];
     } else if (s.type === "excluir") {
       const mineCount = S.trends.filter(t => t.owner === S.uid).length, vidCount = S.videos.filter(v => v.owner === S.uid).length;
       content = [el("h3",{text:"Excluir minha conta"}),
@@ -882,7 +957,8 @@
     if (!S.sb) nodes = [el("div",{class:"login"}, el("div",{class:"mid"}, el("div",{class:"big",style:{fontSize:"40px"},text:"Sem conexão"}), el("p",{class:"lede",text:"Confira a internet e abra o app de novo."})))];
     else if (!S.uid) nodes = [loginScreen()];
     else if (!S.loaded) nodes = [el("div",{class:"login"}, el("div",{class:"mid"}, el("div",{class:"tour",text:"CARREGANDO"}), el("div",{class:"big",html:"Roteiro<br>de<br><span>trends</span>"})))];
-    else if (!S.me) nodes = [nameScreen(), sheetLayer()];
+    else if (!S.me) nodes = [nameScreen()];
+    else if (S.criado) nodes = [criadoScreen()];
     else if (!S.grupo) nodes = [noGroupScreen()];
     else {
       if (S.screen === "nova" && !S.form) S.form = blankForm();
@@ -897,6 +973,15 @@
 
   // ——— Início ———
   try { S.sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {auth:{persistSession:true, autoRefreshToken:true}}); } catch(e) { S.sb = null; }
+  // Quem chega por convite vê o nome do grupo antes de entrar (só nome, dia e quantidade de pessoas)
+  if (S.sb && store.get("trends-convite")) {
+    S.sb.rpc("previa_convite", {p_codigo: store.get("trends-convite")}).then(({data, error}) => {
+      if (error) return;
+      if (data && data.nome) S.convitePrev = data;
+      else { S.conviteInvalido = true; store.set("trends-convite", null); }
+      render();
+    });
+  }
   render();
   if (S.sb) {
     S.sb.auth.getSession().then(({data}) => setSession(data.session));

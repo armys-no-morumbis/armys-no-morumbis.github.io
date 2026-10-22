@@ -13,6 +13,18 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Trends SP">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Roteiro de Trends">
+<meta property="og:title" content="Entra no nosso grupo · Roteiro de Trends">
+<meta property="og:description" content="Planejem, votem e gravem as trends do grupo na semana do show em São Paulo. Só quem tem o convite entra.">
+<meta property="og:url" content="https://armys-no-morumbis.github.io/">
+<meta property="og:image" content="https://armys-no-morumbis.github.io/og-convite.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Roteiro de Trends: entra no nosso grupo">
+<meta property="og:locale" content="pt_BR">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="https://armys-no-morumbis.github.io/og-convite.png">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
@@ -188,6 +200,36 @@ select.input{appearance:none;background-image:linear-gradient(45deg,transparent 
 .install{background:#2A1F38;border:1px solid var(--purple);border-radius:16px;padding:14px;display:flex;gap:12px;align-items:center;font-size:14px;line-height:1.35}
 .install b{display:block;font-size:15px}
 .install .x{margin-left:auto;background:none;border:0;color:var(--muted);font-size:18px;padding:4px}
+
+/* Entrada (convite, nome, grupo) */
+.seg{display:grid;grid-template-columns:1fr 1fr;gap:4px;padding:4px;border-radius:16px;background:var(--card);border:1px solid var(--line)}
+.seg button{height:44px;border-radius:12px;border:none;background:transparent;color:var(--white);font-size:15px;font-weight:700}
+.seg button.on{background:var(--white);color:var(--ink)}
+.pilltag{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:7px 10px;font-family:var(--mono);font-size:12px}
+.input.big{height:60px;border-radius:16px;font-size:22px;font-weight:700;border-color:var(--purple)}
+.input.code{height:64px;font-family:var(--mono);font-size:26px;font-weight:600;letter-spacing:.12em;text-align:center;border-color:var(--purple)}
+.input.big.bad,.input.code.bad{border-color:var(--error)}
+.btn-red.off{background:#2A2424;color:#6E6664}
+.codebox{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:16px;display:flex;align-items:center;justify-content:space-between;gap:12px}
+.login .mid{min-height:0}
+
+/* Explorar */
+.exmedia{position:relative;aspect-ratio:9/16;max-height:560px;width:100%;background:#000;overflow:hidden}
+.exmedia iframe{position:absolute;inset:0;width:100%;height:100%;border:0}
+.exbadges{position:absolute;top:14px;left:14px;display:flex;gap:6px;pointer-events:none}
+.exbadges span{font-family:var(--mono);font-size:11px;background:rgba(14,12,12,.8);padding:4px 8px;border-radius:6px}
+.exbadges .dim{color:var(--muted)}
+.exreacts{position:absolute;right:10px;bottom:70px;display:flex;flex-direction:column;gap:8px}
+.exreacts button{width:56px;height:58px;border-radius:16px;border:1.5px solid transparent;background:rgba(14,12,12,.7);color:var(--white);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;padding:0}
+.exreacts button.on{background:rgba(155,93,229,.45);border-color:var(--purple)}
+.exreacts button:active{transform:scale(.92)}
+.exreacts .e{font-size:22px;line-height:1}
+.exreacts .n{font-family:var(--mono);font-size:10px;font-weight:600}
+.extitle{position:absolute;left:0;right:76px;bottom:48px;padding:40px 14px 12px;background:linear-gradient(transparent,rgba(14,12,12,.9));display:flex;flex-direction:column;gap:4px;pointer-events:none}
+.usebtn{flex:none;height:44px;padding:0 16px;border-radius:14px;border:1.5px solid var(--red);background:var(--red);color:var(--white);font-size:14px;font-weight:800}
+.usebtn.used{background:transparent;cursor:default}
+.reportlnk{align-self:flex-start;border:none;background:transparent;color:#6E6664;font-size:12px;text-decoration:underline;padding:2px 0;font-family:var(--sans)}
+.nav button{font-size:11px}
 </style>
 </head>
 <body>
