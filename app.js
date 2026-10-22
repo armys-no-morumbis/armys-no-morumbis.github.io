@@ -16,6 +16,7 @@
     feed:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h10"/></svg>',
     agenda:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3.5" y="5" width="17" height="15" rx="2.5"/><path d="M3.5 10h17M8 3v4M16 3v4"/></svg>',
     nova:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>',
+    explorar:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M15.5 8.5l-2 5-5 2 2-5z"/></svg>',
     votacao:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 20V11M12 20V4M18 20v-6"/></svg>',
     videos:'<svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13l11-6.5z"/></svg>'
   };
@@ -25,6 +26,7 @@
   const S = {
     sb:null, uid:null, user:null, me:null, loaded:false,
     grupos:[], grupo:null, membros:[],
+    pubs:[], reacoes:[], minhasDen:new Set(), myPubs:{}, exOrdem:"alta", exDia:"todos", exLoaded:false,
     profiles:{}, trends:[], votos:[], videos:[], videosMissing:false,
     screen:"feed", filter:"todas", day:null, toast:null,
     form:null, errors:{}, editing:null, sheet:null, viewer:null, busy:false
@@ -33,6 +35,7 @@
                   set:(k,v) => { try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch(e) {} } };
   { const s = store.get("trends-screen"); if (s && s !== "nova") S.screen = s; }
   S.grupo = store.get("trends-grupo");
+  S.onlyMine = store.get("trends-minhas") === "1";
   // Link de convite: ?convite=CODIGO — guardado até a pessoa entrar com o Google
   { const c = new URLSearchParams(location.search).get("convite");
     if (c && /^[A-Za-z0-9]{6,12}$/.test(c)) { store.set("trends-convite", c.toUpperCase()); history.replaceState(null, "", location.pathname); } }
@@ -144,16 +147,41 @@
       if (sig !== lastSig) { lastSig = sig; softRender(); }
     } finally { loading = false; }
   }
+  // Explorar: trends publicadas por todos os grupos (sem nomes, grupos ou locais)
+  let exLoading = false, exSig = "";
+  async function loadExplorar() {
+    if (!S.uid || exLoading) return;
+    exLoading = true;
+    try {
+      const [p, mine, den] = await Promise.all([
+        S.sb.from("publicacoes").select("id,item_id,owner,titulo,musica,ref_link,show_dia,usos,oculta,created_at").eq("oculta", false).order("created_at", {ascending:false}).limit(100),
+        S.sb.from("publicacoes").select("id,item_id,oculta").eq("owner", S.uid),
+        S.sb.from("denuncias").select("pub_id").eq("user_id", S.uid)
+      ]);
+      if (p.error) { S.exMissing = true; S.exLoaded = true; softRender(); return; }
+      S.exMissing = false;
+      S.pubs = p.data;
+      S.myPubs = Object.fromEntries((mine.data || []).map(x => [x.item_id, x]));
+      S.minhasDen = new Set((den.data || []).map(x => x.pub_id));
+      const ids = p.data.map(x => x.id);
+      const r = ids.length ? await S.sb.from("reacoes").select("pub_id,user_id,tipo").in("pub_id", ids) : {data:[]};
+      S.reacoes = r.data || [];
+      S.exLoaded = true;
+      const sig = JSON.stringify([S.pubs, S.myPubs, [...S.minhasDen], S.reacoes]);
+      if (sig !== exSig) { exSig = sig; softRender(); }
+    } finally { exLoading = false; }
+  }
   // Atualiza a cada 12 s com o app aberto (sem conexão ao vivo, que tem limite no plano grátis)
-  setInterval(() => { if (S.uid && !document.hidden) loadAll(); }, 12000);
-  document.addEventListener("visibilitychange", () => { if (!document.hidden && S.uid) loadAll(); });
+  const refresh = () => { loadAll(); if (S.screen === "explorar" || S.screen === "feed") loadExplorar(); };
+  setInterval(() => { if (S.uid && !document.hidden) refresh(); }, 12000);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden && S.uid) refresh(); });
   async function setSession(session) {
     const uid = session && session.user ? session.user.id : null;
     if (uid === S.uid && (S.loaded || !uid)) { render(); return; }
     S.uid = uid; S.user = session ? session.user : null; S.loaded = false; S.me = null; lastSig = "";
     S.sheet = null; S.viewer = null; S.form = null;
     if (!uid) { render(); return; }
-    render(); await loadAll();
+    render(); await loadAll(); loadExplorar();
   }
   function switchGroup(id) {
     S.grupo = id; store.set("trends-grupo", id); S.sheet = null; S.filter = "todas"; S.day = null;
@@ -173,6 +201,7 @@
     if (screen === "nova" && !S.form) S.form = blankForm();
     if (screen !== "nova") { S.editing = null; S.form = null; }
     try { localStorage.setItem("trends-screen", screen); } catch(e) {}
+    if (screen === "explorar") loadExplorar();
     render(); const sc = document.querySelector(".scroll"); if (sc) sc.scrollTop = 0;
   };
   const blankForm = (day) => ({link:"", name:"", song:"", day: day || (DAYS.includes(todaySP()) ? todaySP() : DAYS[0]), place:"", people:[S.uid]});
@@ -244,6 +273,43 @@
     S.sheet = null; S.nameDraft = null;
     await S.sb.auth.signOut();
     flash("Conta excluída. Até a próxima 💜");
+  }
+  async function publish(t) {
+    S.sheet = null; render();
+    const {error} = await S.sb.rpc("publicar", {p_item: t.id});
+    if (error) return flash(error.message);
+    flash("Trend publicada no Explorar 🔥"); loadExplorar();
+  }
+  async function unpublish(pubId) {
+    S.sheet = null; render();
+    const {error} = await S.sb.from("publicacoes").delete().eq("id", pubId).eq("owner", S.uid);
+    if (error) return fail(error, "Não tirou");
+    flash("A trend saiu do Explorar"); loadExplorar();
+  }
+  async function react(pub, tipo) {
+    const mine = S.reacoes.some(r => r.pub_id === pub.id && r.user_id === S.uid && r.tipo === tipo);
+    S.reacoes = mine ? S.reacoes.filter(r => !(r.pub_id === pub.id && r.user_id === S.uid && r.tipo === tipo)) : [...S.reacoes, {pub_id:pub.id, user_id:S.uid, tipo}];
+    render();
+    const {error} = mine
+      ? await S.sb.from("reacoes").delete().eq("pub_id", pub.id).eq("user_id", S.uid).eq("tipo", tipo)
+      : await S.sb.from("reacoes").insert({pub_id:pub.id, user_id:S.uid, tipo});
+    if (error) { fail(error, "Reação não salva"); loadExplorar(); }
+  }
+  async function report(pub) {
+    S.sheet = null; S.minhasDen.add(pub.id); render();
+    const {error} = await S.sb.rpc("denunciar", {p_pub: pub.id});
+    if (error) { S.minhasDen.delete(pub.id); render(); return flash(error.message); }
+    flash("Denúncia enviada. Obrigada por cuidar do Explorar 💜"); loadExplorar();
+  }
+  async function usePub(pub, grupoId, dia) {
+    S.busy = true; render();
+    const {error} = await S.sb.rpc("usar_publicacao", {p_pub: pub.id, p_grupo: grupoId, p_dia: dia});
+    S.busy = false; S.sheet = null;
+    if (error) { render(); return flash(error.message); }
+    const g = S.grupos.find(x => x.id === grupoId);
+    if (grupoId !== S.grupo) switchGroup(grupoId); else { S.screen = "feed"; S.filter = "todas"; render(); }
+    await loadAll(); loadExplorar();
+    flash(`“${pub.titulo}” entrou no roteiro${g ? " de " + g.nome : ""} em ${dayLabel(dia)}`);
   }
   async function deleteVideo(v) {
     S.viewer = null; render();
@@ -363,7 +429,7 @@
 
   function feedScreen() {
     const order = t => DAYS.indexOf(t.dia);
-    const all = [...S.trends].sort((a,b) => order(a) - order(b));
+    const all = [...S.trends].filter(t => !S.onlyMine || t.owner === S.uid).sort((a,b) => order(a) - order(b));
     const list = all.filter(t => S.filter === "todas" || (t.status || "a_gravar") === S.filter);
     const counts = k => k === "todas" ? all.length : all.filter(t => (t.status || "a_gravar") === k).length;
     let installHint = null;
@@ -381,9 +447,14 @@
       el("div",{class:"head"},
         el("div",{}, el("div",{class:"eyebrow",style:{color:RED},text:daysLeftText()}), el("h1",{class:"h1",text:"Roteiro"})),
         meButton()),
-      groupPill(),
+      el("div",{style:{display:"flex",gap:"8px",flexWrap:"wrap"}}, groupPill(),
+        curGroup() && curGroup().videos_liberados ? el("button",{class:"chip",style:{height:"38px"},onclick:() => go("videos")},"▶ Vídeos do grupo") : null),
       installHint,
-      el("div",{class:"chips"}, [["todas","Todas"],["a_gravar","A gravar"],["gravado","Gravado"],["postado","Postado"]].map(([k,l]) =>
+      el("div",{class:"chips"},
+        el("button",{class:"chip" + (S.onlyMine ? " on" : ""), style:{borderColor: S.onlyMine ? null : PURPLE}, "aria-pressed":String(!!S.onlyMine),
+          onclick:() => { S.onlyMine = !S.onlyMine; store.set("trends-minhas", S.onlyMine ? "1" : null); render(); }}, "Só as minhas ",
+          el("span",{text:String(S.trends.filter(t => t.owner === S.uid).length)})),
+        [["todas","Todas"],["a_gravar","A gravar"],["gravado","Gravado"],["postado","Postado"]].map(([k,l]) =>
         el("button",{class:"chip" + (S.filter === k ? " on" : ""), onclick:() => { S.filter = k; render(); }}, l + " ", el("span",{text:String(counts(k))})))),
       list.length ? list.map(t => {
         const ids = (t.participantes || []).filter(u => S.profiles[u]);
@@ -401,8 +472,56 @@
               el("a",{class:"lnk",href:gcalUrl(t),target:"_blank",rel:"noopener"},"+ Agenda"),
               t.local ? el("a",{class:"lnk",href:"https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent(t.local),target:"_blank",rel:"noopener"},"Mapa") : null,
               curGroup() && curGroup().videos_liberados ? el("button",{class:"lnk",onclick:() => { S.sheet = {type:"enviar", itemId:t.id}; render(); }},"Enviar vídeo") : null,
-              t.owner === S.uid ? el("button",{class:"lnk",onclick:() => { S.sheet = {type:"trend", trend:t}; render(); }},"Editar") : null)));
+              t.owner === S.uid ? el("button",{class:"lnk",onclick:() => { S.sheet = {type:"trend", trend:t}; render(); }},"Editar") : null,
+              t.owner === S.uid && safeTiktok(t.ref_link)
+                ? (S.myPubs[t.id]
+                    ? el("button",{class:"lnk",style:{color: S.myPubs[t.id].oculta ? "#FF6B6B" : "#C9B3EE"},onclick:() => { S.sheet = {type:"publicada", trend:t}; render(); }}, S.myPubs[t.id].oculta ? "Oculta por denúncias" : "No Explorar ✓")
+                    : el("button",{class:"lnk",style:{color:"#C9B3EE"},onclick:() => { S.sheet = {type:"publicar", trend:t}; render(); }},"Mostrar no Explorar"))
+                : null)));
       }) : el("div",{class:"empty",text: all.length ? "Nenhuma trend com esse status." : "Nenhuma trend ainda. Toque no + para adicionar a primeira."}));
+  }
+
+  const REACOES = [["roxo","💜"],["fogo","🔥"],["riso","😂"]];
+  function explorarScreen() {
+    if (!S.exLoaded) loadExplorar();
+    const count = (id, tipo) => S.reacoes.filter(r => r.pub_id === id && (!tipo || r.tipo === tipo)).length;
+    let list = S.pubs.filter(p => S.exDia === "todos" || p.show_dia === S.exDia);
+    if (S.exOrdem === "alta") list = [...list].sort((a,b) => (count(b.id) + 2 * b.usos) - (count(a.id) + 2 * a.usos) || b.created_at.localeCompare(a.created_at));
+    const chip = (on, label, fn) => el("button",{class:"chip" + (on ? " on" : ""), onclick:fn}, label);
+    return el("div",{class:"stack"},
+      el("div",{class:"head"},
+        el("div",{}, el("div",{class:"eyebrow",style:{color:PURPLE},text:"Trends de todos os grupos"}), el("h1",{class:"h1",text:"Explorar"})),
+        meButton()),
+      el("div",{class:"chips"},
+        chip(S.exOrdem === "alta", "🔥 Em alta", () => { S.exOrdem = "alta"; render(); }),
+        chip(S.exOrdem === "recentes", "Recentes", () => { S.exOrdem = "recentes"; render(); }),
+        chip(S.exDia === "todos", "Todos os shows", () => { S.exDia = "todos"; render(); }),
+        SHOW_DAYS.map(d => chip(S.exDia === d, `Show ${dd(d)}/10`, () => { S.exDia = d; render(); }))),
+      S.exMissing ? el("div",{class:"empty",text:"O Explorar ainda não foi ativado no banco."})
+      : !S.exLoaded ? el("div",{class:"empty",text:"Carregando as trends…"})
+      : list.length ? list.map(p => {
+          const id = tiktokId(p.ref_link), mine = p.owner === S.uid, denunciada = S.minhasDen.has(p.id);
+          return el("article",{class:"card"},
+            id ? tiktokPlayer(id) : media(p),
+            el("div",{class:"body"},
+              el("div",{style:{display:"flex",flexDirection:"column",gap:"4px"}},
+                el("div",{class:"tname",text:p.titulo}),
+                p.musica ? el("div",{class:"song",text:"♪ " + p.musica}) : null),
+              el("div",{class:"tags"},
+                el("span",{class:"tag mono",text:`grupo do show ${dd(p.show_dia)}/10`}),
+                p.usos ? el("span",{class:"tag",text:`usada por ${p.usos} ${p.usos === 1 ? "grupo" : "grupos"}`}) : null,
+                mine ? el("span",{class:"tag",style:{color:"#C9B3EE"},text:"sua publicação"}) : null),
+              el("div",{style:{display:"flex",gap:"8px"}}, REACOES.map(([k, e]) => {
+                const on = S.reacoes.some(r => r.pub_id === p.id && r.user_id === S.uid && r.tipo === k), n = count(p.id, k);
+                return el("button",{class:"chip" + (on ? " on" : ""), style:{height:"40px",fontSize:"16px"}, "aria-pressed":String(on), onclick:() => react(p, k)}, e + " ", el("span",{text:String(n)}));
+              })),
+              el("button",{class:"btn-red",style:{height:"48px",fontSize:"15px"},onclick:() => { S.sheet = {type:"usar", pub:p, grupo:S.grupo, dia: DAYS.includes(todaySP()) ? todaySP() : showDate()}; render(); }},"Usar no meu grupo"),
+              el("div",{class:"more"},
+                mine ? el("button",{class:"lnk",onclick:() => unpublish(p.id)},"Tirar do Explorar")
+                  : denunciada ? el("span",{class:"lnk",text:"Você denunciou"})
+                  : el("button",{class:"lnk",onclick:() => { S.sheet = {type:"denunciar", pub:p}; render(); }},"Denunciar"))));
+        })
+      : el("div",{class:"empty",text:"Nenhuma trend publicada ainda. No Roteiro, toque em “Mostrar no Explorar” numa trend do seu grupo para ser a primeira!"}));
   }
 
   function novaScreen() {
@@ -505,7 +624,7 @@
   }
 
   function navBar() {
-    const def = [["feed","Roteiro"],["agenda","Agenda"],["nova","Nova"],["votacao","Votação"],["videos","Vídeos"]];
+    const def = [["feed","Roteiro"],["explorar","Explorar"],["nova","Nova"],["votacao","Votação"],["agenda","Agenda"]];
     return el("nav",{class:"nav"}, def.map(([k,l]) =>
       el("button",{class:(S.screen === k ? "on" : "") + (k === "nova" ? " plus" : ""), onclick:() => { if (k === "nova") { S.form = null; S.editing = null; } go(k); }},
         el("span",{class:"ic",html:ICONS[k]}), el("span",{text:l}))));
@@ -555,6 +674,35 @@
               if (error) return fail(error, "Não saiu");
               S.grupos = S.grupos.filter(x => x.id !== g.id); switchGroup(S.grupos[0] ? S.grupos[0].id : null); flash("Você saiu do grupo");
             }},"Sair deste grupo")];
+    } else if (s.type === "publicar") {
+      const t = s.trend;
+      content = [el("h3",{text:"Mostrar no Explorar?"}),
+        el("p",{style:{margin:0,fontSize:"15px",lineHeight:"1.45",color:"#D8D1CD"}},
+          "Todos os grupos vão ver ", el("b",{text:`“${t.titulo}”`}), " com o vídeo do TikTok e a música. ",
+          el("b",{text:"Não aparecem"}), " o nome do grupo, quem participa nem o local."),
+        el("button",{class:"btn-red",onclick:() => publish(t)},"Publicar no Explorar")];
+    } else if (s.type === "publicada") {
+      const t = s.trend, pub = S.myPubs[t.id];
+      content = [el("h3",{text: pub && pub.oculta ? "Trend oculta" : "No Explorar"}),
+        el("p",{style:{margin:0,fontSize:"15px",lineHeight:"1.45",color:"#D8D1CD"},text: pub && pub.oculta
+          ? "Essa trend recebeu 5 denúncias e saiu do Explorar. Ela continua normal no roteiro do seu grupo."
+          : "Essa trend aparece para todos os grupos no Explorar."}),
+        pub && !pub.oculta ? el("button",{class:"btn-line",onclick:() => publish(t)},"Atualizar com o nome e a música atuais") : null,
+        pub ? el("button",{class:"btn-line danger",onclick:() => unpublish(pub.id)},"Tirar do Explorar") : null];
+    } else if (s.type === "denunciar") {
+      content = [el("h3",{text:"Denunciar trend?"}),
+        el("p",{style:{margin:0,fontSize:"15px",lineHeight:"1.45",color:"#D8D1CD"},text:"Use para conteúdo ofensivo, golpe ou spam. Com 5 denúncias de pessoas diferentes, a trend sai do Explorar até ser revisada."}),
+        el("button",{class:"btn-line danger",onclick:() => report(s.pub)},"Denunciar")];
+    } else if (s.type === "usar") {
+      const p = s.pub;
+      content = [el("h3",{text:"Usar no meu grupo"}),
+        el("p",{style:{margin:0,fontSize:"15px",color:"#D8D1CD"},text:`“${p.titulo}” entra no roteiro como “A gravar”, com você participando. Depois dá para editar.`}),
+        S.grupos.length > 1 ? el("label",{class:"field"}, el("span",{class:"eyebrow",text:"Grupo"}),
+          el("select",{class:"input",id:"u-grupo",onchange:e => s.grupo = e.target.value},
+            S.grupos.map(g => el("option",{value:g.id,selected:g.id === s.grupo,text:g.nome})))) : null,
+        el("div",{class:"field"}, el("span",{class:"eyebrow",text:"Dia para gravar"}),
+          el("div",{class:"days"}, DAYS.map(d => el("button",{class:"day" + (s.dia === d ? " on" : ""), onclick:() => { s.dia = d; render(); }}, el("small",{text:wd(d)}), el("b",{text:dd(d)}))))),
+        el("button",{class:"btn-red",disabled:S.busy,onclick:() => usePub(p, s.grupo, s.dia)}, S.busy ? "Adicionando…" : "Adicionar ao roteiro")];
     } else if (s.type === "novogrupo") {
       content = [el("h3",{text:"Novo grupo"}), ...groupForm()];
     } else if (s.type === "excluir") {
@@ -626,7 +774,7 @@
     else if (!S.grupo) nodes = [noGroupScreen()];
     else {
       if (S.screen === "nova" && !S.form) S.form = blankForm();
-      const view = {feed:feedScreen, nova:novaScreen, videos:videosScreen, votacao:votacaoScreen, agenda:agendaScreen}[S.screen] || feedScreen;
+      const view = {feed:feedScreen, explorar:explorarScreen, nova:novaScreen, videos:videosScreen, votacao:votacaoScreen, agenda:agendaScreen}[S.screen] || feedScreen;
       nodes = [el("div",{class:"scroll"}, view()), navBar(), sheetLayer(), viewerLayer()];
     }
     $root.replaceChildren(...nodes.filter(Boolean));
