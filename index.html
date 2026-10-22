@@ -92,6 +92,8 @@ button:active{transform:scale(.98)}
 .chip.on{background:var(--white);color:var(--ink);border-color:var(--white)}
 .card{background:var(--card);border:1px solid var(--line);border-radius:22px;overflow:hidden}
 .embed{height:580px;max-height:78vh;background:#000}
+.embed.preview{height:420px;border-radius:16px;overflow:hidden;border:1px solid var(--line)}
+a.poster{text-decoration:none}
 .embed iframe{width:100%;height:100%;border:0;display:block}
 .poster{position:relative;aspect-ratio:4/5;background:repeating-linear-gradient(135deg,#1F1B1B 0 10px,#252020 10px 20px);display:flex;align-items:center;justify-content:center;width:100%;border:0;padding:0;color:var(--white)}
 .poster .playb{width:64px;height:64px;border-radius:50%;background:rgba(14,12,12,.75);border:2px solid var(--white);display:flex;align-items:center;justify-content:center;font-size:22px;padding-left:4px}
@@ -187,7 +189,7 @@ select.input{appearance:none;background-image:linear-gradient(45deg,transparent 
 </style>
 </head>
 <body>
-<div class="app" id="app"></div>
+<div class="app" id="app"><div id="root"></div><div class="toast" id="toast" role="status" hidden></div></div>
 
 <script>
 (() => {
@@ -223,7 +225,7 @@ select.input{appearance:none;background-image:linear-gradient(45deg,transparent 
   try { const s = localStorage.getItem("trends-screen"); if (s && s !== "nova") S.screen = s; } catch(e) {}
 
   // ——— Utilidades ———
-  const $app = document.getElementById("app");
+  const $root = document.getElementById("root"), $toast = document.getElementById("toast");
   const el = (tag, attrs = {}, ...kids) => {
     const n = document.createElement(tag);
     for (const [k,v] of Object.entries(attrs)) {
@@ -241,7 +243,9 @@ select.input{appearance:none;background-image:linear-gradient(45deg,transparent 
   };
   const uuid = () => (crypto.randomUUID ? crypto.randomUUID() : "10000000-1000-4000-8000-100000000000".replace(/[018]/g, c => (c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> c / 4).toString(16)));
   let toastT;
-  const flash = msg => { S.toast = msg; render(); clearTimeout(toastT); toastT = setTimeout(() => { S.toast = null; render(); }, 2600); };
+  // O aviso fica fora da tela principal, para não recarregar os vídeos ao aparecer
+  const showToast = (msg, stay) => { clearTimeout(toastT); $toast.textContent = msg || ""; $toast.hidden = !msg; if (msg && !stay) toastT = setTimeout(() => $toast.hidden = true, 2600); };
+  const flash = msg => showToast(msg);
   const fail = (e, what) => flash(`${what}: ${e && e.message ? e.message : e}`);
 
   const dObj = iso => { const [y,m,d] = iso.split("-").map(Number); return new Date(Date.UTC(y, m-1, d)); };
@@ -289,7 +293,7 @@ select.input{appearance:none;background-image:linear-gradient(45deg,transparent 
     S.me = S.profiles[S.uid] || null;
     S.loaded = true;
     const sig = JSON.stringify([S.profiles, S.trends, S.votos, S.videos]);
-    if (sig !== lastSig) { lastSig = sig; render(); }
+    if (sig !== lastSig) { lastSig = sig; softRender(); }
   }
   const scheduleReload = () => { clearTimeout(reloadT); reloadT = setTimeout(loadAll, 350); };
   function subscribe() {
@@ -361,15 +365,15 @@ select.input{appearance:none;background-image:linear-gradient(45deg,transparent 
   }
   async function uploadVideo(file, itemId) {
     if (file.size > MAX_VIDEO) return flash(`Esse vídeo tem ${Math.round(file.size/1048576)} MB. O limite é 50 MB: grave em 1080p ou corte um pouco.`);
-    S.sheet = null; S.toast = "Enviando vídeo… não feche o app"; render();
+    S.sheet = null; render(); showToast("Enviando vídeo… não feche o app", true);
     const extn = ((file.name.split(".").pop() || "mp4").toLowerCase().replace(/[^a-z0-9]/g, "")) || "mp4";
     const path = `${S.uid}/${uuid()}.${extn}`;
     const up = await S.sb.storage.from("videos").upload(path, file, {contentType: file.type || "video/mp4"});
-    if (up.error) { S.toast = null; return fail(up.error, "Vídeo não enviado"); }
+    if (up.error) return fail(up.error, "Vídeo não enviado");
     const trend = S.trends.find(t => t.id === itemId);
     const r = await S.sb.from("videos").insert({path, item_id: itemId || null, titulo: trend ? trend.titulo : file.name.replace(/\.[^.]+$/, "").slice(0, 80)});
-    if (r.error) { await S.sb.storage.from("videos").remove([path]); S.toast = null; return fail(r.error, "Vídeo não salvo"); }
-    S.toast = null; await loadAll(); flash("Vídeo enviado para o grupo");
+    if (r.error) { await S.sb.storage.from("videos").remove([path]); return fail(r.error, "Vídeo não salvo"); }
+    await loadAll(); flash("Vídeo enviado para o grupo");
   }
   async function deleteVideo(v) {
     S.viewer = null; render();
@@ -425,15 +429,16 @@ select.input{appearance:none;background-image:linear-gradient(45deg,transparent 
   const statusBtn = t => el("button",{class:"st " + (t.status || "a_gravar"), disabled:!canStatus(t), title: canStatus(t) ? "Tocar para mudar o status" : "Só quem participa muda o status", onclick:() => cycle(t)}, ST[t.status || "a_gravar"]);
   const crew = (ids, size) => el("div",{class:"avs"}, ids.filter(u => S.profiles[u]).map(u => av(u, size ? {width:size+"px",height:size+"px"} : {})));
 
-  const openEmbeds = new Set();
+  // Player leve do TikTok: mostra a capa real, o @ e a música; toca dentro do card
+  const tiktokPlayer = (id, cls) => el("div",{class:cls || "embed"}, el("iframe",{
+    src:`https://www.tiktok.com/player/v1/${id}?autoplay=0&music_info=1&description=1&rel=0`,
+    allow:"encrypted-media; fullscreen; picture-in-picture", allowfullscreen:true, loading:"lazy", title:"Vídeo do TikTok"}));
   function media(t) {
     const id = tiktokId(t.ref_link);
-    if (id && openEmbeds.has(t.id)) return el("div",{class:"embed"}, el("iframe",{src:`https://www.tiktok.com/embed/v2/${id}`, allow:"encrypted-media; fullscreen; autoplay", allowfullscreen:true, title:"TikTok"}));
-    return el("button",{class:"poster", onclick:() => {
-        if (id) { openEmbeds.add(t.id); render(); } else window.open(t.ref_link, "_blank", "noopener");
-      }},
+    if (id) return tiktokPlayer(id);
+    return el("a",{class:"poster", href:t.ref_link, target:"_blank", rel:"noopener"},
       el("div",{class:"playb",text:"▶"}),
-      el("div",{class:"cap",text: id ? `vídeo do TikTok · ${tiktokHandle(t.ref_link)}` : "abrir no TikTok ↗"}));
+      el("div",{class:"cap",text:`abrir no TikTok ↗ · ${tiktokHandle(t.ref_link)}`}));
   }
 
   function feedScreen() {
@@ -482,14 +487,14 @@ select.input{appearance:none;background-image:linear-gradient(45deg,transparent 
   function novaScreen() {
     const f = S.form, e = S.errors, lid = tiktokId(f.link);
     const input = (key, id, ph, cls) => el("input",{class:"input " + (cls || ""), id, value:f[key], placeholder:ph, maxlength: key === "link" ? "500" : "120",
-      oninput:ev => { f[key] = ev.target.value; if (e[key]) { e[key] = null; render(); } else if (key === "link") render(); }});
+      oninput:ev => { const before = tiktokId(f.link) + "|" + isTiktok(f.link); f[key] = ev.target.value; if (e[key]) { e[key] = null; render(); } else if (key === "link" && before !== tiktokId(f.link) + "|" + isTiktok(f.link)) render(); }});
     return el("div",{class:"stack",style:{gap:"18px"}},
       el("div",{class:"head",style:{alignItems:"center"}},
         el("h1",{class:"h1",text: S.editing ? "Editar trend" : "Nova trend"}),
         el("button",{class:"close","aria-label":"Fechar",onclick:() => go("feed")},"✕")),
       el("label",{class:"field"}, el("span",{class:"eyebrow",text:"Link do TikTok"}),
         input("link","f-link","https://www.tiktok.com/@.../video/...", e.link ? "bad" : lid ? "good" : ""),
-        e.link ? el("span",{class:"err",text:e.link}) : lid ? el("span",{class:"ok",text:"Vídeo reconhecido · vai aparecer no card"})
+        e.link ? el("span",{class:"err",text:e.link}) : lid ? [el("span",{class:"ok",text:"Vídeo reconhecido · é assim que vai aparecer no card"}), tiktokPlayer(lid, "embed preview")]
           : f.link && isTiktok(f.link) ? el("span",{class:"ok",text:"Link curto: vai abrir no TikTok. Para tocar no app, use o link completo com /video/."}) : null),
       el("label",{class:"field"}, el("span",{class:"eyebrow",text:"Nome da trend"}), input("name","f-name","Ex.: coreô do refrão na fila", e.name ? "bad" : "")),
       el("label",{class:"field"}, el("span",{class:"eyebrow",text:"Música"}), input("song","f-song","Ex.: SWIM — BTS")),
@@ -637,7 +642,16 @@ select.input{appearance:none;background-image:linear-gradient(45deg,transparent 
   }
 
   // ——— Render ———
+  // Atualizações que chegam do grupo esperam a pessoa sair do vídeo que está assistindo
+  let pending = false;
+  function softRender() {
+    const a = document.activeElement;
+    if (a && a.tagName === "IFRAME") { pending = true; return; }
+    render();
+  }
+  addEventListener("focus", () => { if (pending) { pending = false; render(); } });
   function render() {
+    pending = false;
     const sc = document.querySelector(".scroll"), top = sc ? sc.scrollTop : 0;
     const act = document.activeElement, focusId = act && act.id, sel = act && "selectionStart" in act ? [act.selectionStart, act.selectionEnd] : null;
     let nodes;
@@ -650,8 +664,7 @@ select.input{appearance:none;background-image:linear-gradient(45deg,transparent 
       const view = {feed:feedScreen, nova:novaScreen, videos:videosScreen, votacao:votacaoScreen, agenda:agendaScreen}[S.screen] || feedScreen;
       nodes = [el("div",{class:"scroll"}, view()), navBar(), sheetLayer(), viewerLayer()];
     }
-    if (S.toast) nodes.push(el("div",{class:"toast",role:"status",text:S.toast}));
-    $app.replaceChildren(...nodes.filter(Boolean));
+    $root.replaceChildren(...nodes.filter(Boolean));
     const sc2 = document.querySelector(".scroll"); if (sc2) sc2.scrollTop = top;
     if (focusId) { const f = document.getElementById(focusId); if (f) { f.focus({preventScroll:true}); if (sel && "setSelectionRange" in f) try { f.setSelectionRange(sel[0], sel[1]); } catch(e) {} } }
   }
