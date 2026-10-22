@@ -27,7 +27,7 @@
     sb:null, uid:null, user:null, me:null, loaded:false,
     grupos:[], grupo:null, membros:[],
     pubs:[], reacoes:[], minhasDen:new Set(), myPubs:{}, exOrdem:"alta", exDia:"todos", exLoaded:false,
-    profiles:{}, trends:[], votos:[], videos:[], videosMissing:false, coments:[], reacItem:[], comMissing:false,
+    profiles:{}, trends:[], votos:[], videos:[], videosMissing:false, coments:[], reacItem:[], curtidas:[], curtidasOff:false, comMissing:false,
     screen:"feed", filter:"todas", day:null, toast:null,
     form:null, errors:{}, editing:null, sheet:null, viewer:null, busy:false
   };
@@ -145,14 +145,17 @@
           ]);
           S.comMissing = !!(c.error || ri.error);
           S.coments = c.data || []; S.reacItem = ri.data || [];
-        } else { S.coments = []; S.reacItem = []; }
+          const cIds = S.coments.map(x => x.id);
+          const cc = cIds.length ? await S.sb.from("curtidas_comentario").select("comentario_id,user_id").in("comentario_id", cIds) : {data:[]};
+          S.curtidasOff = !!cc.error; S.curtidas = cc.data || [];
+        } else { S.coments = []; S.reacItem = []; S.curtidas = []; }
         const itemIds = new Set(idList);
         S.votos = v.data.filter(r => r.slot === r.item_id && itemIds.has(r.item_id));
         S.videosMissing = !!vid.error;
         S.videos = vid.error ? [] : vid.data;
       }
       S.loaded = true;
-      const sig = JSON.stringify([S.me, S.grupos, S.grupo, S.membros, S.profiles, S.trends, S.votos, S.videos, S.coments, S.reacItem]);
+      const sig = JSON.stringify([S.me, S.grupos, S.grupo, S.membros, S.profiles, S.trends, S.votos, S.videos, S.coments, S.reacItem, S.curtidas]);
       if (sig !== lastSig) { lastSig = sig; softRender(); }
     } finally { loading = false; }
   }
@@ -337,6 +340,15 @@
     if (error) { render(); return flash(error.message); }
     s.draft = ""; lastSig = ""; await loadAll(); render();
     const list = document.querySelector(".comlist"); if (list) list.scrollTop = list.scrollHeight;
+  }
+  async function likeComment(c) {
+    const mine = S.curtidas.some(x => x.comentario_id === c.id && x.user_id === S.uid);
+    S.curtidas = mine ? S.curtidas.filter(x => !(x.comentario_id === c.id && x.user_id === S.uid)) : [...S.curtidas, {comentario_id:c.id, user_id:S.uid}];
+    render();
+    const {error} = mine
+      ? await S.sb.from("curtidas_comentario").delete().eq("comentario_id", c.id).eq("user_id", S.uid)
+      : await S.sb.from("curtidas_comentario").insert({comentario_id:c.id, user_id:S.uid});
+    if (error) { fail(error, "Curtida não salva"); loadAll(); }
   }
   async function deleteComment(c) {
     S.coments = S.coments.filter(x => x.id !== c.id); render();
@@ -772,7 +784,17 @@
                 el("b",{style:{fontSize:"14px"},text:nameOf(c.user_id)}),
                 el("span",{class:"mono",style:{fontSize:"10.5px",color:"#7A7270"},text:quando(c.created_at)}),
                 (c.user_id === S.uid || admin) ? el("button",{class:"lnk danger",style:{fontSize:"12px",marginLeft:"auto"},onclick:() => deleteComment(c)},"apagar") : null),
-              el("div",{style:{fontSize:"15px",lineHeight:"1.4",color:"#D8D1CD",overflowWrap:"anywhere",whiteSpace:"pre-wrap"},text:c.texto}))))
+              el("div",{style:{fontSize:"15px",lineHeight:"1.4",color:"#D8D1CD",overflowWrap:"anywhere",whiteSpace:"pre-wrap"},text:c.texto})),
+            S.curtidasOff ? null : (() => {
+              const on = S.curtidas.some(x => x.comentario_id === c.id && x.user_id === S.uid);
+              const n = S.curtidas.filter(x => x.comentario_id === c.id).length;
+              const quem = S.curtidas.filter(x => x.comentario_id === c.id).map(x => nameOf(x.user_id)).join(", ");
+              return el("button",{"aria-label": on ? "Descurtir" : "Curtir", "aria-pressed":String(on), title: quem ? `Curtido por ${quem}` : "Curtir",
+                style:{flex:"none",background:"none",border:0,padding:"2px 4px",display:"flex",flexDirection:"column",alignItems:"center",gap:"1px",color: on ? "#E0262F" : "#7A7270"},
+                onclick:() => likeComment(c)},
+                el("span",{style:{fontSize:"18px",lineHeight:1},text: on ? "♥" : "♡"}),
+                el("span",{class:"mono",style:{fontSize:"10.5px",minHeight:"12px"},text: n ? String(n) : ""}));
+            })()))
           : el("div",{class:"empty",style:{padding:"16px 0"},text:"Ninguém comentou ainda. Combine os detalhes aqui: quem leva o quê, onde encontrar, que horas gravar."})),
         el("div",{style:{display:"flex",gap:"8px"}},
           el("input",{class:"input",id:"com-texto",maxlength:"300",value:s.draft || "",placeholder:"Escreva um comentário…",autocomplete:"off",
