@@ -375,6 +375,20 @@ select.input{appearance:none;background-image:linear-gradient(45deg,transparent 
     if (r.error) { await S.sb.storage.from("videos").remove([path]); return fail(r.error, "Vídeo não salvo"); }
     await loadAll(); flash("Vídeo enviado para o grupo");
   }
+  async function deleteAccount() {
+    S.busy = true; render();
+    const paths = [
+      ...S.videos.filter(v => v.owner === S.uid).map(v => v.path),
+      ...S.trends.filter(t => t.owner === S.uid && t.video_path).map(t => t.video_path)
+    ];
+    if (paths.length) await S.sb.storage.from("videos").remove(paths);
+    const {error} = await S.sb.rpc("delete_my_account");
+    S.busy = false;
+    if (error) { render(); return fail(error, "Não excluiu"); }
+    S.sheet = null; S.nameDraft = null;
+    await S.sb.auth.signOut();
+    flash("Conta excluída. Até a próxima 💜");
+  }
   async function deleteVideo(v) {
     S.viewer = null; render();
     await S.sb.storage.from("videos").remove([v.path]);
@@ -600,7 +614,16 @@ select.input{appearance:none;background-image:linear-gradient(45deg,transparent 
           if (error) return fail(error, "Nome não salvo");
           S.sheet = null; await loadAll(); flash("Nome atualizado");
         }},"Salvar nome"),
-        el("button",{class:"btn-line",onclick:async () => { S.sheet = null; await S.sb.auth.signOut(); }},"Sair")];
+        el("button",{class:"btn-line",onclick:async () => { S.sheet = null; await S.sb.auth.signOut(); }},"Sair"),
+        el("button",{class:"lnk danger",style:{alignSelf:"center",padding:"6px"},onclick:() => { S.sheet = {type:"excluir"}; render(); }},"Excluir minha conta")];
+    } else if (s.type === "excluir") {
+      const mineCount = S.trends.filter(t => t.owner === S.uid).length, vidCount = S.videos.filter(v => v.owner === S.uid).length;
+      content = [el("h3",{text:"Excluir minha conta"}),
+        el("p",{style:{margin:0,fontSize:"15px",lineHeight:"1.45",color:"#D8D1CD"}},
+          "Isso apaga de vez o seu nome no grupo, ",
+          el("b",{text:`${mineCount} ${mineCount === 1 ? "trend criada" : "trends criadas"}`}), " por você, os seus votos e ",
+          el("b",{text:`${vidCount} ${vidCount === 1 ? "vídeo enviado" : "vídeos enviados"}`}), ". Não dá para desfazer."),
+        el("button",{class:"btn-line danger",disabled:S.busy,onclick:deleteAccount}, S.busy ? "Excluindo…" : "Excluir de vez")];
     } else if (s.type === "trend") {
       const t = s.trend;
       content = [el("h3",{text:t.titulo}),
