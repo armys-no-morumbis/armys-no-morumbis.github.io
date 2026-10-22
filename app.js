@@ -94,6 +94,21 @@
   const curGroup = () => S.grupos.find(g => g.id === S.grupo) || null;
   const showDate = () => (curGroup() && curGroup().show_dia) || SHOW;
   const inviteUrl = g => `${location.origin}${location.pathname}?convite=${g.codigo}`;
+  const isPremium = () => !!(curGroup() && (curGroup().premium || curGroup().videos_liberados));
+  const temVideos = () => isPremium();
+
+  // ——— Pix (QR Code estático com valor, pago na conta PJ; aprovação manual) ———
+  const PIX = {chave:"125e18e8-7403-41bc-a31b-dbc180597e76", nome:"ROTEIRO DE TRENDS", cidade:"SAO PAULO", valor:"10.00"};
+  const tlv = (id, v) => id + String(v.length).padStart(2, "0") + v;
+  const crc16 = s => { let c = 0xFFFF; for (let i = 0; i < s.length; i++) { c ^= s.charCodeAt(i) << 8; for (let j = 0; j < 8; j++) c = (c & 0x8000) ? ((c << 1) ^ 0x1021) & 0xFFFF : (c << 1) & 0xFFFF; } return c.toString(16).toUpperCase().padStart(4, "0"); };
+  const pixPayload = codigo => {
+    const conta = tlv("00","br.gov.bcb.pix") + tlv("01", PIX.chave) + tlv("02", `Premium ${fmtCode(codigo)}`);
+    const p = tlv("00","01") + tlv("26", conta) + tlv("52","0000") + tlv("53","986") + tlv("54", PIX.valor) +
+              tlv("58","BR") + tlv("59", PIX.nome) + tlv("60", PIX.cidade) + tlv("62", tlv("05", ("PREMIUM" + codigo).slice(0, 25))) + "6304";
+    return p + crc16(p);
+  };
+  const qrSvg = text => { try { const q = window.qrcode(0, "M"); q.addData(text); q.make(); return q.createSvgTag({cellSize:5, margin:3, scalable:true}); } catch(e) { return ""; } };
+  const pedePremium = msg => /premium/i.test(msg || "");
 
   // ——— Dados ———
   // Cada consulta só devolve o que é do grupo da pessoa: o banco bloqueia o resto
@@ -152,10 +167,12 @@
         const itemIds = new Set(idList);
         S.votos = v.data.filter(r => r.slot === r.item_id && itemIds.has(r.item_id));
         S.videosMissing = !!vid.error;
+        const pg = await S.sb.from("pagamentos").select("id,user_id,status,created_at,decidido_em").eq("grupo_id", S.grupo).order("created_at", {ascending:false});
+        S.pagamentos = pg.error ? [] : pg.data;
         S.videos = vid.error ? [] : vid.data;
       }
       S.loaded = true;
-      const sig = JSON.stringify([S.me, S.grupos, S.grupo, S.membros, S.profiles, S.trends, S.votos, S.videos, S.coments, S.reacItem, S.curtidas]);
+      const sig = JSON.stringify([S.me, S.grupos, S.grupo, S.membros, S.profiles, S.trends, S.votos, S.videos, S.coments, S.reacItem, S.curtidas, S.pagamentos]);
       if (sig !== lastSig) { lastSig = sig; softRender(); }
     } finally { loading = false; }
   }
@@ -194,6 +211,7 @@
     S.sheet = null; S.viewer = null; S.form = null;
     if (!uid) { render(); return; }
     render(); await loadAll(); loadExplorar();
+    S.sb.rpc("sou_admin").then(({data}) => { S.admin = data === true; render(); });
   }
   function switchGroup(id) {
     S.grupo = id; store.set("trends-grupo", id); S.sheet = null; S.filter = "todas"; S.day = null;
@@ -240,7 +258,7 @@
       ? await S.sb.from("itens").update(row).eq("id", S.editing)
       : await S.sb.from("itens").insert({id: uuid(), status:"a_gravar", grupo_id:S.grupo, ...row});
     S.busy = false;
-    if (r.error) return fail(r.error, "Não salvou");
+    if (r.error) { if (pedePremium(r.error.message)) { S.sheet = {type:"premium"}; render(); } return flash(r.error.message); }
     const msg = S.editing ? "Trend atualizada" : `“${row.titulo}” entrou no roteiro de ${dayLabel(row.dia)}`;
     S.form = null; S.editing = null; S.screen = "feed"; S.filter = "todas";
     await loadAll(); flash(msg);
@@ -317,7 +335,7 @@
     S.busy = true; render();
     const {error} = await S.sb.rpc("usar_publicacao", {p_pub: pub.id, p_grupo: grupoId, p_dia: dia});
     S.busy = false; S.sheet = null;
-    if (error) { render(); return flash(error.message); }
+    if (error) { if (pedePremium(error.message) && grupoId === S.grupo) S.sheet = {type:"premium"}; render(); return flash(error.message); }
     const g = S.grupos.find(x => x.id === grupoId);
     { const u = usados(); u.add(usadoKey(pub.id, grupoId)); store.set("trends-usados", JSON.stringify([...u].slice(-300))); }
     if (grupoId !== S.grupo) switchGroup(grupoId); else { S.screen = "feed"; S.filter = "todas"; render(); }
@@ -566,7 +584,7 @@
         el("div",{}, el("div",{class:"eyebrow",style:{color:RED},text:daysLeftText()}), el("h1",{class:"h1",text:"Roteiro"})),
         meButton()),
       el("div",{style:{display:"flex",gap:"8px",flexWrap:"wrap"}}, groupPill(),
-        null),
+        el("button",{class:"chip",style:{height:"38px",borderColor: isPremium() ? "#2E2929" : "#E0262F",color: isPremium() ? "#C9B3EE" : "#F6F2EF"},onclick:() => { S.sheet = {type:"premium"}; render(); }}, isPremium() ? "⭐ Premium" : "⭐ Premium · R$ 10")),
       installHint,
       el("div",{class:"chips"},
         el("button",{class:"chip" + (S.onlyMine ? " on" : ""), style:{borderColor: S.onlyMine ? null : PURPLE}, "aria-pressed":String(!!S.onlyMine),
@@ -590,7 +608,7 @@
             el("div",{class:"more"},
               el("a",{class:"lnk",href:gcalUrl(t),target:"_blank",rel:"noopener"},"+ Agenda"),
               t.local ? el("a",{class:"lnk",href:"https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent(t.local),target:"_blank",rel:"noopener"},"Mapa") : null,
-              curGroup() && curGroup().videos_liberados ? el("button",{class:"lnk",onclick:() => { S.sheet = {type:"enviar", itemId:t.id}; render(); }},"Enviar vídeo") : null,
+              temVideos() ? el("button",{class:"lnk",onclick:() => { S.sheet = {type:"enviar", itemId:t.id}; render(); }},"Enviar vídeo") : null,
               t.owner === S.uid ? el("button",{class:"lnk",onclick:() => { S.sheet = {type:"trend", trend:t}; render(); }},"Editar") : null,
               t.copia_explorar ? el("span",{class:"lnk",style:{color:"#7A7270"},text:"veio do Explorar"}) : null,
               t.owner === S.uid && safeTiktok(t.ref_link) && !t.copia_explorar
@@ -695,7 +713,7 @@
         el("div",{}, el("div",{class:"eyebrow",style:{color:PURPLE},text:`${S.videos.length} ${S.videos.length === 1 ? "VÍDEO" : "VÍDEOS"} DO GRUPO`}), el("h1",{class:"h1",text:"Nossos vídeos"})),
         meButton()),
       S.videosMissing ? el("div",{class:"empty",text:"A galeria ainda não foi ativada no banco."}) : null,
-      curGroup() && curGroup().videos_liberados
+      temVideos()
         ? [el("button",{class:"upload",disabled:S.videosMissing,onclick:() => file.click()},"+ Enviar vídeo"), file]
         : el("div",{class:"install",style:{background:"#1A1717",borderColor:"#2E2929"}}, el("div",{},
             el("b",{text:"Os vídeos de vocês ficam no TikTok"}),
@@ -705,7 +723,7 @@
         return el("button",{class:"vtile",onclick:() => { S.viewer = v; render(); }},
           el("video",{src:videoUrl(v.path) + "#t=0.1", muted:true, playsInline:true, preload:"metadata"}),
           el("div",{class:"cap"}, el("div",{class:"av",style:{background:bg,color:fg},text:initial(v.owner)}), el("div",{text:v.titulo || "Vídeo"})));
-      })) : (S.videosMissing || !(curGroup() && curGroup().videos_liberados) ? null : el("div",{class:"empty",text:"Nenhum vídeo ainda. Grave uma trend e envie aqui."})));
+      })) : (S.videosMissing || !(temVideos()) ? null : el("div",{class:"empty",text:"Nenhum vídeo ainda. Grave uma trend e envie aqui."})));
   }
 
   function votacaoScreen() {
@@ -759,9 +777,9 @@
 
   function navBar() {
     const def = [["feed","Roteiro"],["agenda","Agenda"],["nova","Nova"],["explorar","Explorar"],["votacao","Votação"]];
-    if (curGroup() && curGroup().videos_liberados) def.push(["videos","Vídeos"]);
+    if (temVideos()) def.push(["videos","Vídeos"]);
     return el("nav",{class:"nav",style:{gridTemplateColumns:`repeat(${def.length},1fr)`}}, def.map(([k,l]) =>
-      el("button",{class:(S.screen === k ? "on" : "") + (k === "nova" ? " plus" : ""), onclick:() => { if (k === "nova") { S.form = null; S.editing = null; } go(k); }},
+      el("button",{class:(S.screen === k ? "on" : "") + (k === "nova" ? " plus" : ""), onclick:() => { if (k === "nova") { if (!isPremium() && S.trends.length >= 3) { S.sheet = {type:"premium"}; render(); return flash("O grupo grátis tem até 3 trends."); } S.form = null; S.editing = null; } go(k); }},
         el("span",{class:"ic",html:ICONS[k]}), el("span",{text:l}))));
   }
 
@@ -779,6 +797,7 @@
           if (error) return fail(error, "Nome não salvo");
           S.sheet = null; await loadAll(); flash("Nome atualizado");
         }},"Salvar nome"),
+        S.admin ? el("button",{class:"btn-line",style:{borderColor:"#9B5DE5"},onclick:() => { S.sheet = {type:"admin"}; render(); }},"Pagamentos (admin)") : null,
         el("button",{class:"btn-line",onclick:() => { S.sheet = {type:"grupo"}; render(); }},"Meu grupo e convites"),
         el("button",{class:"btn-line",onclick:async () => { S.sheet = null; await S.sb.auth.signOut(); }},"Sair"),
         el("button",{class:"lnk danger",style:{alignSelf:"center",padding:"6px"},onclick:() => { S.sheet = {type:"excluir"}; render(); }},"Excluir minha conta")];
@@ -789,6 +808,7 @@
         el("h3",{text: s.novo ? "Grupo criado! 💜" : g.nome}),
         el("p",{style:{margin:0,fontSize:"14px",color:"#D8D1CD"},text: s.novo ? "Agora mande o link para as amigas. Só quem tiver o link entra, e só vocês veem o que está aqui." : `Show em ${dayLabel(g.show_dia)} · ${groupSize()} ${groupSize() === 1 ? "pessoa" : "pessoas"}`}),
         el("button",{class:"btn-red",onclick:() => shareInvite(g)},"Convidar amigas"),
+        !isPremium() ? el("button",{class:"btn-line",style:{borderColor:"#E0262F"},onclick:() => { S.sheet = {type:"premium"}; render(); }},`⭐ Liberar premium · R$ 10 (grátis: ${groupSize()}/7 pessoas, ${S.trends.length}/3 trends)`) : null,
         s.showLink ? el("input",{class:"input",readonly:true,value:inviteUrl(g),onfocus:e => e.target.select()}) : null,
         el("div",{class:"mono",style:{fontSize:"12px",color:"#A39C98",textAlign:"center"},text:`código do grupo: ${fmtCode(g.codigo)}`}),
         el("div",{class:"people"}, orderedPeople().map(p =>
@@ -875,6 +895,72 @@
           el("input",{class:"input",id:"com-texto",maxlength:"300",value:s.draft || "",placeholder:"Escreva um comentário…",autocomplete:"off",
             oninput:e => s.draft = e.target.value, onkeydown:e => { if (e.key === "Enter") { e.preventDefault(); sendComment(s); } }}),
           el("button",{class:"btn-red",style:{width:"auto",flex:"none",padding:"0 18px",height:"52px",fontSize:"15px"},disabled:S.busy,onclick:() => sendComment(s)}, S.busy ? "…" : "Enviar"))];
+    } else if (s.type === "premium") {
+      const g = curGroup(); if (!g) { S.sheet = null; return null; }
+      const pend = S.pagamentos.find(p => p.status === "pendente");
+      const meuAprov = S.pagamentos.find(p => p.user_id === S.uid && p.status === "aprovado");
+      const pediuReemb = S.pagamentos.find(p => p.status === "reembolso_pedido");
+      const dentroPrazo = meuAprov && meuAprov.decidido_em && (Date.now() - new Date(meuAprov.decidido_em).getTime()) < 7 * 864e5;
+      const beneficios = el("div",{style:{display:"flex",flexDirection:"column",gap:"6px",fontSize:"15px",color:"#D8D1CD"}},
+        ["Até 50 pessoas no grupo","Trends ilimitadas","Enviar os vídeos do grupo","Vale para todo mundo do grupo, até o fim da semana do show"].map(b => el("div",{text:"✓ " + b})));
+      if (isPremium()) {
+        content = [el("h3",{text:"Grupo premium ⭐"}), beneficios,
+          pediuReemb ? el("p",{style:{margin:0,fontSize:"14px",color:"#C9B3EE"},text:"Reembolso pedido. Vamos devolver o Pix e avisar aqui."}) : null,
+          dentroPrazo && !pediuReemb ? (s.confirm
+            ? el("button",{class:"btn-line danger",onclick:async () => {
+                const {error} = await S.sb.rpc("pedir_reembolso", {p_grupo: g.id});
+                if (error) return flash(error.message);
+                S.sheet = null; await loadAll(); flash("Reembolso pedido. Devolvemos o Pix em até 2 dias úteis.");
+              }},"Confirmar: pedir reembolso e perder o premium")
+            : el("button",{class:"lnk",style:{alignSelf:"center"},onclick:() => { s.confirm = true; render(); }},"Pedir reembolso (até 7 dias depois da compra)")) : null];
+      } else if (pend) {
+        content = [el("h3",{text:"Pagamento em análise"}),
+          el("p",{style:{margin:0,fontSize:"15px",lineHeight:"1.45",color:"#D8D1CD"},text:"Assim que conferirmos o Pix, o premium libera para todo o grupo. Costuma levar até 2 horas, e o app avisa sozinho."}),
+          el("div",{class:"mono",style:{fontSize:"12px",color:"#A39C98"},text:`pedido às ${quando(pend.created_at)} · código ${fmtCode(g.codigo)}`})];
+      } else {
+        const payload = pixPayload(g.codigo);
+        content = [el("h3",{text:"Premium do grupo · R$ 10"}), beneficios,
+          el("div",{style:{background:"#fff",borderRadius:"16px",padding:"10px",width:"220px",maxWidth:"100%",alignSelf:"center"},html:qrSvg(payload)}),
+          el("button",{class:"btn-line",onclick:async () => {
+            try { await navigator.clipboard.writeText(payload); flash("Código Pix copiado. Cole no app do seu banco."); }
+            catch(e) { s.mostrarCodigo = true; render(); }
+          }},"Copiar código Pix (copia e cola)"),
+          s.mostrarCodigo ? el("input",{class:"input",readonly:true,value:payload,onfocus:e => e.target.select()}) : null,
+          el("p",{style:{margin:0,fontSize:"13px",color:"#A39C98",lineHeight:"1.4"},text:`Pague R$ 10,00 pelo app do seu banco. O código do grupo (${fmtCode(g.codigo)}) já vai junto no Pix. Depois toque em “Já paguei”.`}),
+          el("button",{class:"btn-red",disabled:S.busy,onclick:async () => {
+            S.busy = true; render();
+            const {error} = await S.sb.rpc("pedir_premium", {p_grupo: g.id});
+            S.busy = false;
+            if (error) { render(); return flash(error.message); }
+            await loadAll(); render(); flash("Recebemos seu aviso. Vamos conferir o Pix e liberar o premium.");
+          }}, S.busy ? "Enviando…" : "Já paguei"),
+          el("a",{class:"lnk",style:{alignSelf:"center",fontSize:"12px"},href:"termos.html",target:"_blank",rel:"noopener"},"Ao pagar, você concorda com os Termos de uso")];
+      }
+    } else if (s.type === "admin") {
+      if (!s.list && !s.loading) {
+        s.loading = true;
+        S.sb.rpc("listar_pagamentos").then(({data, error}) => { s.loading = false; s.list = error ? [] : data; if (error) flash(error.message); render(); });
+      }
+      const decidir = async (p, acao) => {
+        const {error} = await S.sb.rpc("decidir_pagamento", {p_id: p.id, p_acao: acao});
+        if (error) return flash(error.message);
+        s.list = null; flash(acao === "aprovar" ? `Premium liberado para “${p.grupo_nome}”` : acao === "recusar" ? "Pedido recusado" : "Reembolso registrado"); render(); loadAll();
+      };
+      const rotulo = {pendente:"⏳ aguardando", aprovado:"✓ aprovado", recusado:"✕ recusado", reembolso_pedido:"↩ pediu reembolso", reembolsado:"↩ reembolsado"};
+      content = [el("h3",{text:"Pagamentos"}),
+        el("p",{style:{margin:0,fontSize:"13px",color:"#A39C98",lineHeight:"1.4"},text:"Confira no app do Nubank PJ um Pix de R$ 10 com o código do grupo na mensagem. Só aprove depois de ver o dinheiro na conta."}),
+        !s.list ? el("div",{class:"empty",text:"Carregando…"})
+        : s.list.length ? el("div",{style:{display:"flex",flexDirection:"column",gap:"10px",maxHeight:"55vh",overflowY:"auto"}}, s.list.map(p =>
+            el("div",{style:{background:"#0E0C0C",border:"1px solid #2E2929",borderRadius:"14px",padding:"12px",display:"flex",flexDirection:"column",gap:"8px"}},
+              el("div",{style:{display:"flex",justifyContent:"space-between",gap:"8px",flexWrap:"wrap"}},
+                el("b",{style:{overflowWrap:"anywhere"},text:p.grupo_nome}), el("span",{class:"mono",style:{fontSize:"12px"},text:fmtCode(p.codigo)})),
+              el("div",{class:"mono",style:{fontSize:"11.5px",color:"#A39C98"},text:`${rotulo[p.status] || p.status} · ${p.quem} · ${quando(p.created_at)} · R$ ${Number(p.valor).toFixed(2).replace(".", ",")}`}),
+              p.status === "pendente" ? el("div",{class:"row"},
+                el("button",{class:"btn-red",style:{height:"44px",fontSize:"14px"},onclick:() => decidir(p, "aprovar")},"Aprovar"),
+                el("button",{class:"btn-line danger",style:{height:"44px",fontSize:"14px"},onclick:() => decidir(p, "recusar")},"Recusar")) : null,
+              p.status === "reembolso_pedido" ? el("button",{class:"btn-line",style:{height:"44px",fontSize:"14px"},onclick:() => decidir(p, "reembolsado")},"Já devolvi o Pix") : null)))
+        : el("div",{class:"empty",text:"Nenhum pagamento por enquanto."}),
+        el("button",{class:"lnk",style:{alignSelf:"center"},onclick:() => { s.list = null; render(); }},"Atualizar")];
     } else if (s.type === "remover") {
       const g = curGroup(), n = S.trends.filter(t => t.owner === s.pessoa).length;
       content = [el("h3",{text:`Remover ${nameOf(s.pessoa)}?`}),
